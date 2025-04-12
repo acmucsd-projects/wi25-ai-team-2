@@ -1,0 +1,56 @@
+from dotenv import load_dotenv
+import os
+from google import genai
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from flashrank import Ranker, RerankRequest
+
+
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+TOP_K = 20	
+
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+ranker = Ranker(max_length=128)
+
+dataset = [
+	{
+		"id":1,
+		"text":"random doc 1",
+	},
+	{
+		"id":2,
+		"text":"random doc 2",
+	},
+	{
+		"id":3,
+		"text":"random doc 3",
+	}
+]
+vectors = [getVector(text) for text in dataset]
+
+
+def getVector(input):
+	result = client.models.embed_content(
+        model="gemini-embedding-exp-03-07",  # latest model path
+        content=input,
+        task_type="semantic_similarity"  # or "semantic_similarity"
+    )
+	return result['embedding']
+	
+def getSimilar(input):
+	query_vector = getVector(input)
+	similarities = cosine_similarity([query_vector], vectors)[0]
+	results = list(zip(dataset, similarities)) # pairing text with similarities
+	results.sort(key=lambda x: x[1], reverse=True)
+
+	return results[:min(len(results), TOP_K)]
+
+def rerank(input): 
+	rerankrequest = RerankRequest(query=input, passages=dataset)
+	results = ranker.rerank(rerankrequest)
+
+	# https://github.com/PrithivirajDamodaran/FlashRank
+	return results
