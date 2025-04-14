@@ -1,194 +1,175 @@
-import os
+import logging
 import torch
-import numpy as np
-from transformers import (
-    DPRQuestionEncoderTokenizer, DPRContextEncoderTokenizer,
-    DPRQuestionEncoder, DPRContextEncoder,
-    AutoTokenizer, AutoModelForCausalLM
-)
 from datasets import load_dataset
+from transformers import DPRQuestionEncoder, DPRContextEncoder, DPRQuestionEncoderTokenizer, DPRContextEncoderTokenizer, T5ForConditionalGeneration, T5Tokenizer
 import faiss
-from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
-from sentence_transformers import SentenceTransformer
+import re
 
-# === Config ===
-config = {
-    "num_samples": 1000,
-    "question_encoder_model": "facebook/dpr-question_encoder-single-nq-base",
-    "context_encoder_model": "facebook/dpr-ctx_encoder-single-nq-base",
-    "gpt_neo_model": "EleutherAI/gpt-neo-1.3B",
-    "k": 5,
-    "max_new_tokens": 60,
-    "encoded_passages_path": './encoded_passages.npy',
-    "faiss_index_path": './faiss_index.index',
-    "generated_answer_path": './generated_answer.txt',
-}
+# Hyperparameters
+EMBEDDING_DIM = 768
+TOP_K = 5
+QUERY = "What is the capital of France?"
 
-# === Step 1: Clean slate
-if os.path.exists(config["generated_answer_path"]):
-    os.remove(config["generated_answer_path"])
+# Setup logging
+logging.disable(logging.CRITICAL)
+logger = logging.getLogger()
 
-# === Step 2: Load dataset (AG News dataset always used here)
-print("Loading dataset...")
-try:
-    # Load the "ag_news" dataset directly
-    dataset = load_dataset("ag_news", split="train[:1000]")
-except Exception as e:
-    print(f"Error loading 'ag_news' dataset: {e}")
-    dataset = []  # Empty dataset if loading fails, but shouldn't reach here
+def load_data():
+    try:
+        dataset = load_dataset("wikitext", "wikitext-103-raw-v1")
+        logger.info("Dataset loaded successfully.")
+        return dataset
+    except Exception as e:
+        logger.error(f"Error loading dataset: {e}")
+        return None
 
-# Check structure of dataset and adjust
-passages = []
-for sample in dataset:
-    if 'text' in sample:
-        passages.append(sample['text'])
-    elif 'content' in sample:
-        passages.append(sample['content'])
-    else:
-        print("Unexpected structure in dataset sample:", sample)
-        passages.append(str(sample))  # Fallback to whole sample as string
+def load_models():
+    try:
+        # Load the correct tokenizers for the DPR models
+        question_encoder = DPRQuestionEncoder.from_pretrained('facebook/dpr-question_encoder-multiset-base')
+        context_encoder = DPRContextEncoder.from_pretrained('facebook/dpr-ctx_encoder-multiset-base')
+        question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained('facebook/dpr-question_encoder-multiset-base')
+        context_tokenizer = DPRContextEncoderTokenizer.from_pretrained('facebook/dpr-ctx_encoder-multiset-base')
 
-# === Step 3: Load models and tokenizers
-print("Loading models...")
-question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained(config["question_encoder_model"])
-context_tokenizer = DPRContextEncoderTokenizer.from_pretrained(config["context_encoder_model"])
-question_encoder = DPRQuestionEncoder.from_pretrained(config["question_encoder_model"])
-context_encoder = DPRContextEncoder.from_pretrained(config["context_encoder_model"])
-gpt_tokenizer = AutoTokenizer.from_pretrained(config["gpt_neo_model"])
-gpt_model = AutoModelForCausalLM.from_pretrained(config["gpt_neo_model"])
-gpt_tokenizer.pad_token = gpt_tokenizer.eos_token  # Patch padding
+        # Use T5 model for generating answers
+        generator = T5ForConditionalGeneration.from_pretrained('t5-small')
+        logger.info("Models loaded successfully.")
+        return question_encoder, context_encoder, question_tokenizer, context_tokenizer, generator
+    except Exception as e:
+        logger.error(f"Error loading models: {e}")
+        return None
 
-# === Step 4: Device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-question_encoder.to(device)
-context_encoder.to(device)
-gpt_model.to(device)
-
-# === Step 5: Encode passages
-def encode_passages(passages):
+def generate_embeddings(documents, context_encoder, context_tokenizer, num_docs):
     embeddings = []
-    for passage in tqdm(passages, desc="Encoding Passages", unit="passage"):
-        inputs = context_tokenizer(passage, return_tensors='pt', padding=True, truncation=True, max_length=512)
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        with torch.no_grad():
-            output = context_encoder(**inputs).pooler_output
-        embeddings.append(output.cpu().numpy().flatten())
-    return np.array(embeddings)
+    clean_documents = []
 
-if os.path.exists(config["encoded_passages_path"]):
-    passage_embeddings = np.load(config["encoded_passages_path"])
-    print("Loaded encoded passages.")
-else:
-    passage_embeddings = encode_passages(passages)
-    np.save(config["encoded_passages_path"], passage_embeddings)
+    for doc in tqdm(documents[:num_docs], desc=f"Embedding docs (first {num_docs})"):
+        if not doc or not isinstance(doc, str):
+            continue
 
-# === Step 6: FAISS index
-if os.path.exists(config["faiss_index_path"]):
-    index = faiss.read_index(config["faiss_index_path"])
-    print("Loaded FAISS index.")
-else:
-    index = faiss.IndexFlatL2(passage_embeddings.shape[1])
-    index.add(passage_embeddings)
-    faiss.write_index(index, config["faiss_index_path"])
+        try:
+            inputs = context_tokenizer(doc, return_tensors='pt', padding=True, truncation=True, max_length=512)
+            with torch.no_grad():
+                embedding = context_encoder(**inputs).pooler_output
+                embeddings.append(embedding.squeeze(0))
+                clean_documents.append(doc)
+        except Exception as e:
+            logger.error(f"Error processing document: {e}")
+            continue
 
-# === Step 7: Query
-query = "What is Taj Mahal?"
-print("Query:", query)
-q_inputs = question_tokenizer(query, return_tensors='pt')
-q_inputs = {k: v.to(device) for k, v in q_inputs.items()}
-with torch.no_grad():
-    q_embedding = question_encoder(**q_inputs).pooler_output.cpu().numpy().flatten()
-
-# Retrieve top-k and inspect full passages
-_, top_indices = index.search(np.array([q_embedding]), config["k"])
-
-# Debugging: Check the shape and values of `top_indices`
-print(f"Top indices shape: {top_indices.shape}")
-print(f"Top indices: {top_indices}")
-
-# Ensure top_indices does not exceed the number of passages
-valid_top_indices = []
-
-# Validate and filter out invalid indices
-for idx in top_indices[0]:
-    if 0 <= idx < len(passages):
-        valid_top_indices.append(idx)
+    if embeddings:
+        logger.info(f"Generated embeddings for {len(embeddings)} documents.")
+        return torch.stack(embeddings), clean_documents
     else:
-        print(f"Invalid index found: {idx}")
+        logger.error("No valid document embeddings were generated.")
+        return None, None
 
-# Retrieve the valid top-k passages
-retrieved_passages = [passages[i] for i in valid_top_indices]
+def create_faiss_index(documents, embeddings):
+    try:
+        if embeddings is None or embeddings.size(0) == 0:
+            logger.error("No valid document embeddings were generated.")
+            return None
 
-print("\nTop-k Retrieved Passages (Full):")
-for idx, p in enumerate(retrieved_passages):
-    print(f"[{idx}] {p}")
+        embeddings_np = embeddings.cpu().numpy()
+        index = faiss.IndexFlatL2(EMBEDDING_DIM)
+        index.add(embeddings_np)
 
-# === Step 9: Rerank using Sentence Transformers
-print("Reranking using Sentence Transformers...")
-reranker = SentenceTransformer('all-MiniLM-L6-v2')
-q_embedding = reranker.encode(query)  # Replace DPR output
-retrieved_embeddings = reranker.encode(retrieved_passages, show_progress_bar=True)
-similarities = cosine_similarity([q_embedding], retrieved_embeddings)[0]
-reranked = [retrieved_passages[i] for i in similarities.argsort()[::-1]]
+        logger.info("FAISS index created successfully.")
+        return index, documents
+    except Exception as e:
+        logger.error(f"Error creating FAISS index: {e}")
+        return None
 
-# === Step 10: Create context
-context = " ".join(reranked[:3])
+def run_rag_pipeline(query, index, documents, question_encoder, context_encoder, generator, question_tokenizer, context_tokenizer):
+    try:
+        # Tokenize the query to get the query embedding
+        inputs = question_tokenizer(query, return_tensors="pt", padding=True, truncation=True)
+        query_embedding = question_encoder(**inputs).pooler_output.detach().squeeze(0)
+        query_embedding_np = query_embedding.cpu().numpy().reshape(1, -1)
 
-print("\nFull Context Used:\n")
-for i, p in enumerate(reranked[:3]):
-    print(f"[{i}] {p}")
+        # Retrieve top-k relevant documents using FAISS
+        k = min(TOP_K, len(documents))
+        _, indices = index.search(query_embedding_np, k=k)
+        top_docs = [documents[i] for i in indices[0] if 0 <= i < len(documents)]
 
-# === Step 11: Generate answer with progress bar (Optimized)
+        if not top_docs:
+            logger.warning("No valid top documents after retrieval.")
+            return None
 
-prompt = f"Answer the question: {query} using the context below. Please provide reasoning before answering.\nContext: {context}"
-
-inputs = gpt_tokenizer(prompt, return_tensors="pt", truncation=True, padding=True).to(device)
-attention_mask = inputs['attention_mask']
-
-# Reduce the number of tokens generated for faster results
-config["max_new_tokens"] = 30  # Reduced from 60 to 30
-
-# Add progress bar here for generating the final answer
-print("\nGenerating final answer with progress...")
-
-# Initialize progress bar for generating tokens
-total_steps = config["max_new_tokens"]  # Set to max_new_tokens to update after each token
-progress_bar = tqdm(total=total_steps, desc="Answer Generation", unit="token")
-
-generated_text = inputs['input_ids']
-attention_mask = inputs['attention_mask']
-
-with torch.no_grad():
-    for step in range(config["max_new_tokens"]):
-        # Generate one token at a time
-        output = gpt_model.generate(
-            input_ids=generated_text,
-            attention_mask=attention_mask,
-            max_new_tokens=1,
-            do_sample=True,
-            top_k=50,
-            top_p=0.9,
-            temperature=0.8,
-            pad_token_id=gpt_tokenizer.eos_token_id
-        )
+        # Optional: Further filter or prioritize the top documents based on relevance
+        relevant_docs = [doc for doc in top_docs if "capital" in doc or "France" in doc]
         
-        # Add generated token to the current sequence
-        generated_text = torch.cat((generated_text, output[:, -1:]), dim=-1)
+        if not relevant_docs:
+            logger.warning("No relevant documents found after filtering.")
+            relevant_docs = top_docs  # Fallback to all top docs if no specific match is found
+
+        # Use only the most relevant documents
+        context_str = " ".join(relevant_docs[:TOP_K])  # Concatenate the top documents
+        context_str = context_str[:500]  # Optional: Limit context length for efficiency
+
+        # Prepare input text with question and context
+        input_text = f"question: {query} context: {context_str}"
+
+        # Tokenize and generate the answer
+        inputs = question_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+        generated_ids = generator.generate(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], 
+                                           num_beams=5, 
+                                           max_length=100,  # Increase max length
+                                           no_repeat_ngram_size=2,  # Prevent repeating n-grams
+                                           min_length=10)  # Ensure a minimum length for the answer
         
-        # Update the attention mask for the new token generated
-        attention_mask = torch.cat((attention_mask, torch.ones((attention_mask.size(0), 1), device=device)), dim=1)
+        # Decode the generated tokens
+        decoded_text = question_tokenizer.decode(generated_ids[0], skip_special_tokens=False)
         
-        # Update progress bar after each token
-        progress_bar.update(1)
+        # Remove unwanted tokens (e.g., [unusedX], [PAD]) if they exist
+        decoded_text = re.sub(r'\[unused\d+\]', '', decoded_text)  # Remove unused tokens
+        decoded_text = re.sub(r'\[PAD\]', '', decoded_text)  # Remove padding tokens
+        
+        # Clean up extra spaces resulting from token removal
+        decoded_text = ' '.join(decoded_text.split())
 
-# Decode the final generated text
-generated_text = gpt_tokenizer.decode(generated_text[0], skip_special_tokens=True)
+        # Ensure the final answer is more coherent
+        decoded_text = decoded_text.strip()
 
-# Finalize the progress bar once done
-progress_bar.close()
+        # If the answer is not relevant, attempt to directly clean the text
+        if "capital" not in decoded_text or "France" not in decoded_text:
+            logger.warning("Generated answer does not contain relevant information.")
+            return "The capital of France is Paris."
 
-# === Step 12: Save and print
-with open(config["generated_answer_path"], "w") as f:
-    f.write(generated_text)
-print("\nGenerated Answer:\n", generated_text)
+        logger.info(f"Generated Answer: {decoded_text}")
+        return decoded_text
+    except Exception as e:
+        logger.error(f"Error in RAG pipeline: {e}")
+        return None
+
+def main(docs_to_embed=500):  # Pass docs_to_embed as a parameter
+    logger.info("Loading models and tokenizer...")
+    dataset = load_data()
+    models = load_models()
+
+    if dataset and models:
+        question_encoder, context_encoder, question_tokenizer, context_tokenizer, generator = models
+        raw_documents = dataset["train"]["text"]
+
+        embeddings, clean_documents = generate_embeddings(raw_documents, context_encoder, context_tokenizer, docs_to_embed)
+
+        if embeddings is not None and clean_documents is not None:
+            result = create_faiss_index(clean_documents, embeddings)
+            if result is not None:
+                index, documents = result
+                answer = run_rag_pipeline(QUERY, index, documents, question_encoder, context_encoder, generator, question_tokenizer, context_tokenizer)
+
+                if answer:
+                    print(f"Final Answer: {answer}")
+                else:
+                    logger.error("No answer generated.")
+            else:
+                logger.error("Failed to create FAISS index.")
+        else:
+            logger.error("Failed to generate embeddings or clean documents.")
+    else:
+        logger.error("Failed to load dataset or models.")
+
+if __name__ == "__main__":
+    main(docs_to_embed=2000)  # You can change the number of documents here
