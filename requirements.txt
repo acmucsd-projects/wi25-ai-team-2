@@ -29,6 +29,7 @@ pyarrow==19.0.1
 python-dateutil==2.9.0.post0
 pytz==2025.2
 PyYAML==6.0.2
+rank-bm25==0.2.2
 regex==2024.11.6
 requests==2.32.3
 safetensors==0.5.3
