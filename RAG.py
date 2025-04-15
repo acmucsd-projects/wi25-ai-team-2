@@ -22,10 +22,10 @@ warnings.filterwarnings("ignore", message="resource_tracker: There appear to")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Hyperparameters
-EMBEDDING_DIM = 300  # Reduced to 300D to match PCA reduced dimension
+EMBEDDING_DIM = 300
 TOP_K = 20
-DOCS_TO_EMBED = 10000  # Number of documents to embed from Wikipedia for speed
-CONFIDENCE_THRESHOLD = 0.7  # Increased confidence threshold for reranked documents
+DOCS_TO_EMBED = 10000
+CONFIDENCE_THRESHOLD = 0.7
 QUERIES = [
     "What is the largest planet in our solar system?",
     "How does a computer virus spread?",
@@ -49,16 +49,27 @@ QUERIES = [
     "How does a nuclear reactor work?"
 ]
 
-
 # Configuration
 CONFIG = {
-    "encoder_model_name": "intfloat/e5-base",  # Smaller model for encoder
-    "reranker_model_name": "cross-encoder/ms-marco-MiniLM-L-6-v2",  # Reranker model
-    "generator_model_name": "google/flan-t5-base",  # Generator model
+    "encoder_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "reranker_model_name": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "generator_model_name": "google/flan-t5-large",
     "faiss_index_name": "faiss_index.index",
     "embeddings_name": "encoded_passages.npy",
-    "documents_name": "clean_documents.txt"
+    "documents_name": "clean_documents.txt",
+    "retriever_top_k": 5,
+    "embedding_dim": 384,
+    "num_beams": 1,
+    "top_k": 0,
+    "top_p": 1.0,
+    "temperature": 0.7,
+    "use_dense_retrieval": True,
+    "use_sparse_retrieval": False,
+    "log_retrieval_steps": False,
+    "log_generation_steps": False,
+    "answer_post_processing": True,
 }
+
 
 # Paths
 EMBEDDINGS_PATH = CONFIG["embeddings_name"]
@@ -68,7 +79,6 @@ FAISS_INDEX_PATH = CONFIG["faiss_index_name"]
 logging.disable(logging.CRITICAL)
 logger = logging.getLogger()
 
-
 def load_data():
     try:
         dataset = load_dataset("wikipedia", "20220301.en", split="train[:1%]", trust_remote_code=True)
@@ -77,16 +87,15 @@ def load_data():
         print(f"Error loading dataset: {e}")
         return None
 
-
 def load_models():
     try:
-        encoder_tokenizer = AutoTokenizer.from_pretrained(CONFIG["encoder_model_name"])  # Smaller model for encoder
+        encoder_tokenizer = AutoTokenizer.from_pretrained(CONFIG["encoder_model_name"])
         encoder_model = AutoModel.from_pretrained(CONFIG["encoder_model_name"]).to(device)
 
         reranker_tokenizer = AutoTokenizer.from_pretrained(CONFIG["reranker_model_name"])
         reranker = AutoModelForSequenceClassification.from_pretrained(CONFIG["reranker_model_name"]).to(device)
 
-        generator_tokenizer = AutoTokenizer.from_pretrained(CONFIG["generator_model_name"])  # Smaller model for generator
+        generator_tokenizer = AutoTokenizer.from_pretrained(CONFIG["generator_model_name"])
         generator = AutoModelForSeq2SeqLM.from_pretrained(CONFIG["generator_model_name"]).to(device)
 
         return encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator
@@ -94,16 +103,20 @@ def load_models():
         print(f"Error loading models: {e}")
         return None
 
-
 def clean_text(text):
     return re.sub(r'\s+', ' ', text.strip())
 
+def sanitize_context(text):
+    text = re.sub(r'-lrb-', '(', text)
+    text = re.sub(r'-rrb-', ')', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'[^a-zA-Z0-9\s.,;:!?\'\"()\-]', '', text)
+    return text.strip()
 
 def save_embeddings_and_documents(embeddings, documents):
     np.save(EMBEDDINGS_PATH, embeddings.cpu().numpy())
     with open(DOCUMENTS_PATH, "w", encoding="utf-8") as f:
         f.writelines([f"{doc}\n" for doc in documents])
-
 
 def load_embeddings_and_documents():
     if not os.path.exists(EMBEDDINGS_PATH) or not os.path.exists(DOCUMENTS_PATH):
@@ -113,20 +126,16 @@ def load_embeddings_and_documents():
         documents = [line.strip() for line in f]
     return embeddings, documents
 
-
 def save_faiss_index(index):
     faiss.write_index(index, FAISS_INDEX_PATH)
 
-
 def load_faiss_index():
     return faiss.read_index(FAISS_INDEX_PATH) if os.path.exists(FAISS_INDEX_PATH) else None
-
 
 def reduce_embeddings(embeddings, new_dim=300):
     pca = PCA(n_components=min(new_dim, embeddings.shape[0], embeddings.shape[1]))
     reduced = pca.fit_transform(embeddings.cpu().numpy())
     return torch.tensor(reduced)
-
 
 def generate_embeddings(docs, encoder_tokenizer, encoder_model, num_docs):
     embeddings, clean_docs = [], []
@@ -144,85 +153,59 @@ def generate_embeddings(docs, encoder_tokenizer, encoder_model, num_docs):
     embeddings = torch.stack(embeddings) if embeddings else None
     return embeddings, clean_docs
 
-
 def create_faiss_index(embeddings):
     if embeddings.ndimension() != 2:
         raise ValueError(f"Embeddings should have shape (num_docs, embedding_dim), but got {embeddings.shape}")
-
-    num_docs, dim = embeddings.shape
-
-    # Use IndexFlatL2 for faster, simpler index creation without training
-    index = faiss.IndexFlatL2(dim)  # Fast and simple index, no training needed
-
+    index = faiss.IndexFlatL2(embeddings.shape[1])
     try:
         index.add(embeddings.cpu().numpy())
     except Exception as e:
         print(f"Error adding embeddings to FAISS index: {e}")
         return None
-
     return index
-
 
 def rerank(query, docs, reranker_tokenizer, reranker, top_n=TOP_K):
     inputs = reranker_tokenizer([[query, doc] for doc in docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
     with torch.no_grad():
         scores = reranker(**inputs).logits.squeeze(-1)
-    
-    # Filter out documents with scores below the confidence threshold
     top_indices = torch.topk(scores, k=min(top_n, len(scores))).indices.tolist()
     reranked_docs = [docs[i] for i in top_indices]
     reranked_scores = [scores[i].item() for i in top_indices]
-    
-    # Only keep documents with scores above the confidence threshold
     return [(doc, score) for doc, score in zip(reranked_docs, reranked_scores) if score >= CONFIDENCE_THRESHOLD]
-
 
 def encode_query(query, encoder_tokenizer, encoder_model, target_dim=EMBEDDING_DIM):
     query_inputs = encoder_tokenizer(f"query: {query}", return_tensors="pt", truncation=True, padding=True).to(device)
     query_embedding = encoder_model(**query_inputs).last_hidden_state[:, 0, :]
-
     if query_embedding.shape[1] != target_dim:
         query_embedding = query_embedding[:, :target_dim]
-
-    query_embedding = query_embedding.detach().cpu().numpy().astype("float32")
-    return query_embedding
-
+    return query_embedding.detach().cpu().numpy().astype("float32")
 
 def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator):
     try:
         q_embedding = encode_query(query, encoder_tokenizer, encoder_model)
-
         k = min(TOP_K * 3, len(docs))
-
-        try:
-            distances, top_idxs = index.search(q_embedding, k=k)
-        except Exception as e:
-            return "Error retrieving documents."
-
-        try:
-            retrieved_docs = [docs[i] for i in top_idxs[0]]
-        except Exception as e:
-            return "Error accessing documents."
-
-        try:
-            reranked_docs_with_scores = rerank(query, retrieved_docs, reranker_tokenizer, reranker)
-            reranked_docs = [doc for doc, _ in reranked_docs_with_scores]
-        except Exception as e:
-            return "Error reranking documents."
-
-        try:
-            context = " ".join(reranked_docs)[:2048]  # Limiting context length to prevent truncation
-            input_text = f"Based on the context below, answer the question: {query}\n\nContext: {context}"
-            gen_inputs = generator_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
-            output_ids = generator.generate(**gen_inputs, num_beams=10, max_length=100, no_repeat_ngram_size=2, min_length=10, top_p=0.95, temperature=0.7, do_sample=True)
-            answer = generator_tokenizer.decode(output_ids[0], skip_special_tokens=True)
-            return answer
-        except Exception as e:
-            return "Error generating answer."
-
+        distances, top_idxs = index.search(q_embedding, k=k)
+        retrieved_docs = [docs[i] for i in top_idxs[0]]
+        reranked_docs_with_scores = rerank(query, retrieved_docs, reranker_tokenizer, reranker)
+        reranked_docs = [doc for doc, _ in reranked_docs_with_scores]
+        sanitized_docs = [sanitize_context(doc) for doc in reranked_docs]
+        context = " ".join(sanitized_docs)[:2048]
+        input_text = f"Based on the context below, answer the question: {query}\n\nContext: {context}"
+        gen_inputs = generator_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
+        output_ids = generator.generate(
+            **gen_inputs,
+            num_beams=10,
+            max_length=100,
+            no_repeat_ngram_size=2,
+            min_length=10,
+            top_p=0.95,
+            temperature=0.7,
+            do_sample=True
+        )
+        answer = generator_tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        return answer
     except Exception as e:
-        return "Error in processing the query."
-
+        return f"Error in processing the query: {e}"
 
 def main():
     print("Loading data...")
@@ -238,7 +221,6 @@ def main():
         return
 
     encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator = models
-
     embeddings, docs = load_embeddings_and_documents()
     index = load_faiss_index()
 
@@ -269,12 +251,7 @@ def main():
             generator_tokenizer,
             generator
         )
-
-        if answer:
-            print(f"Query: {query}\nAnswer: {answer}")
-        else:
-            print(f"Query: {query}\nAnswer: No valid answer found.")
-
+        print(f"Query: {query}\nAnswer: {answer}\n")
 
 if __name__ == "__main__":
     main()
