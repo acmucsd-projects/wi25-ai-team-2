@@ -1,6 +1,6 @@
 import os
-import logging
 import torch
+import logging
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -14,7 +14,7 @@ import warnings
 import numpy as np
 import multiprocessing
 from sklearn.decomposition import PCA
-from rank_bm25 import BM25Okapi  # Add BM25 for hybrid retrieval
+from tqdm import tqdm
 
 # Setup
 multiprocessing.set_start_method('spawn', force=True)
@@ -24,12 +24,46 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Hyperparameters
 EMBEDDING_DIM = 300  # Reduced to 300D to match PCA reduced dimension
 TOP_K = 20
-DOCS_TO_EMBED = 10000  # Reduced docs to embed for speed
+DOCS_TO_EMBED = 10000  # Number of documents to embed from Wikipedia for speed
+CONFIDENCE_THRESHOLD = 0.7  # Increased confidence threshold for reranked documents
+QUERIES = [
+    "What is the largest planet in our solar system?",
+    "How does a computer virus spread?",
+    "What is the theory of quantum mechanics?",
+    "Who invented the telephone?",
+    "What are the main causes of climate change?",
+    "Explain the process of cellular respiration.",
+    "What is the difference between speed and velocity?",
+    "Who was the first person to walk on the moon?",
+    "What are the benefits of exercise?",
+    "How do black holes form?",
+    "What is the significance of the Magna Carta?",
+    "What is the fastest animal in the world?",
+    "What are the properties of water?",
+    "Explain the process of natural selection.",
+    "Who painted the Mona Lisa?",
+    "What is the difference between an asteroid and a comet?",
+    "How does the internet work?",
+    "What is the significance of the discovery of penicillin?",
+    "What is the role of mitochondria in cells?",
+    "How does a nuclear reactor work?"
+]
+
+
+# Configuration
+CONFIG = {
+    "encoder_model_name": "intfloat/e5-base",  # Smaller model for encoder
+    "reranker_model_name": "cross-encoder/ms-marco-MiniLM-L-6-v2",  # Reranker model
+    "generator_model_name": "google/flan-t5-base",  # Generator model
+    "faiss_index_name": "faiss_index.index",
+    "embeddings_name": "encoded_passages.npy",
+    "documents_name": "clean_documents.txt"
+}
 
 # Paths
-EMBEDDINGS_PATH = "encoded_passages.npy"
-DOCUMENTS_PATH = "clean_documents.txt"
-FAISS_INDEX_PATH = "faiss_index.index"
+EMBEDDINGS_PATH = CONFIG["embeddings_name"]
+DOCUMENTS_PATH = CONFIG["documents_name"]
+FAISS_INDEX_PATH = CONFIG["faiss_index_name"]
 
 logging.disable(logging.CRITICAL)
 logger = logging.getLogger()
@@ -37,22 +71,23 @@ logger = logging.getLogger()
 
 def load_data():
     try:
-        dataset = load_dataset("ag_news", split="train")
+        dataset = load_dataset("wikipedia", "20220301.en", split="train[:1%]", trust_remote_code=True)
         return dataset
     except Exception as e:
         print(f"Error loading dataset: {e}")
         return None
 
+
 def load_models():
     try:
-        encoder_tokenizer = AutoTokenizer.from_pretrained("intfloat/e5-base")  # Smaller model for encoder
-        encoder_model = AutoModel.from_pretrained("intfloat/e5-base").to(device)
+        encoder_tokenizer = AutoTokenizer.from_pretrained(CONFIG["encoder_model_name"])  # Smaller model for encoder
+        encoder_model = AutoModel.from_pretrained(CONFIG["encoder_model_name"]).to(device)
 
-        reranker_tokenizer = AutoTokenizer.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
-        reranker = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2").to(device)
+        reranker_tokenizer = AutoTokenizer.from_pretrained(CONFIG["reranker_model_name"])
+        reranker = AutoModelForSequenceClassification.from_pretrained(CONFIG["reranker_model_name"]).to(device)
 
-        generator_tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")  # Smaller model for generator
-        generator = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base").to(device)
+        generator_tokenizer = AutoTokenizer.from_pretrained(CONFIG["generator_model_name"])  # Smaller model for generator
+        generator = AutoModelForSeq2SeqLM.from_pretrained(CONFIG["generator_model_name"]).to(device)
 
         return encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator
     except Exception as e:
@@ -113,10 +148,18 @@ def generate_embeddings(docs, encoder_tokenizer, encoder_model, num_docs):
 def create_faiss_index(embeddings):
     if embeddings.ndimension() != 2:
         raise ValueError(f"Embeddings should have shape (num_docs, embedding_dim), but got {embeddings.shape}")
-    
-    index = faiss.IndexIVFPQ(faiss.IndexFlatL2(embeddings.shape[1]), embeddings.shape[1], 100, 8, 8)
-    index.train(embeddings.cpu().numpy())
-    index.add(embeddings.cpu().numpy())
+
+    num_docs, dim = embeddings.shape
+
+    # Use IndexFlatL2 for faster, simpler index creation without training
+    index = faiss.IndexFlatL2(dim)  # Fast and simple index, no training needed
+
+    try:
+        index.add(embeddings.cpu().numpy())
+    except Exception as e:
+        print(f"Error adding embeddings to FAISS index: {e}")
+        return None
+
     return index
 
 
@@ -124,8 +167,14 @@ def rerank(query, docs, reranker_tokenizer, reranker, top_n=TOP_K):
     inputs = reranker_tokenizer([[query, doc] for doc in docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
     with torch.no_grad():
         scores = reranker(**inputs).logits.squeeze(-1)
+    
+    # Filter out documents with scores below the confidence threshold
     top_indices = torch.topk(scores, k=min(top_n, len(scores))).indices.tolist()
-    return [docs[i] for i in top_indices]
+    reranked_docs = [docs[i] for i in top_indices]
+    reranked_scores = [scores[i].item() for i in top_indices]
+    
+    # Only keep documents with scores above the confidence threshold
+    return [(doc, score) for doc, score in zip(reranked_docs, reranked_scores) if score >= CONFIDENCE_THRESHOLD]
 
 
 def encode_query(query, encoder_tokenizer, encoder_model, target_dim=EMBEDDING_DIM):
@@ -139,28 +188,11 @@ def encode_query(query, encoder_tokenizer, encoder_model, target_dim=EMBEDDING_D
     return query_embedding
 
 
-def hybrid_retrieve(query, docs, index, bm25_model, encoder_tokenizer, encoder_model, k=TOP_K):
-    # Get dense retrieval from FAISS
-    q_embedding = encode_query(query, encoder_tokenizer, encoder_model)
-    distances, top_idxs = index.search(q_embedding, k=k)
-    retrieved_docs = [docs[i] for i in top_idxs[0]]
-    
-    # Get sparse retrieval from BM25
-    bm25_scores = bm25_model.get_scores(query.split())  # BM25 score for the query
-    bm25_top_docs = [docs[i] for i in np.argsort(bm25_scores)[-k:]]  # Top k BM25 docs
-    
-    # Combine the results from both methods
-    hybrid_docs = list(set(retrieved_docs + bm25_top_docs))  # Merge without duplicates
-    
-    return hybrid_docs
-
-
-def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator, filter_keyword=None):
+def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator):
     try:
         q_embedding = encode_query(query, encoder_tokenizer, encoder_model)
 
-        # Increase the number of docs retrieved for better chances of finding relevant ones
-        k = min(TOP_K * 3, len(docs))  # Increased retrieval range
+        k = min(TOP_K * 3, len(docs))
 
         try:
             distances, top_idxs = index.search(q_embedding, k=k)
@@ -173,24 +205,16 @@ def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reran
             return "Error accessing documents."
 
         try:
-            reranked_docs = rerank(query, retrieved_docs, reranker_tokenizer, reranker)
+            reranked_docs_with_scores = rerank(query, retrieved_docs, reranker_tokenizer, reranker)
+            reranked_docs = [doc for doc, _ in reranked_docs_with_scores]
         except Exception as e:
             return "Error reranking documents."
 
         try:
-            if filter_keyword:
-                filtered_docs = [doc for doc in reranked_docs if filter_keyword.lower() in doc.lower()]
-            else:
-                filtered_docs = reranked_docs
-        except Exception as e:
-            return "Error filtering documents."
-
-        # Add specific context to the prompt for generation
-        try:
-            context = " ".join(filtered_docs if filtered_docs else reranked_docs)[:2048]
-            input_text = f"Given the following context: {context}, answer the question: {query}"
+            context = " ".join(reranked_docs)[:2048]  # Limiting context length to prevent truncation
+            input_text = f"Based on the context below, answer the question: {query}\n\nContext: {context}"
             gen_inputs = generator_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
-            output_ids = generator.generate(**gen_inputs, num_beams=5, max_length=100, no_repeat_ngram_size=2, min_length=10)
+            output_ids = generator.generate(**gen_inputs, num_beams=10, max_length=100, no_repeat_ngram_size=2, min_length=10, top_p=0.95, temperature=0.7, do_sample=True)
             answer = generator_tokenizer.decode(output_ids[0], skip_special_tokens=True)
             return answer
         except Exception as e:
@@ -232,15 +256,8 @@ def main():
     else:
         print("Using cached embeddings and index...")
 
-    while True:
-        query = input("\nEnter your query (or type 'exit' to quit): ")
-        if query.lower() == 'exit':
-            break
-        
-        filter_keyword = input("Enter a keyword to filter documents by (or press Enter to skip): ").strip()
-        if not filter_keyword:
-            filter_keyword = None
-        
+    print("Processing queries...")
+    for query in QUERIES:
         answer = run_rag_pipeline(
             query,
             index,
@@ -250,10 +267,9 @@ def main():
             reranker_tokenizer,
             reranker,
             generator_tokenizer,
-            generator,
-            filter_keyword=filter_keyword
+            generator
         )
-        
+
         if answer:
             print(f"Query: {query}\nAnswer: {answer}")
         else:
