@@ -19,24 +19,24 @@ import traceback
 # Setup
 multiprocessing.set_start_method('spawn', force=True)
 warnings.filterwarnings("ignore", message="resource_tracker: There appear to")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Ensure usage of GPU
 
 # Hyperparameters
-EMBEDDING_DIM = 768  # Use the actual embedding dimension of the model
+EMBEDDING_DIM = 768
 TOP_K = 50
 DOCS_TO_EMBED = 5000
 CONFIDENCE_THRESHOLD = 0.7
 QUERIES = [
-    "What are the main differences between Xbox and PlayStation consoles?",
-    "How did the game Fortnite change the gaming industry?",
-    "What are the plot twists in the movie Inception?",
-    "Who won the Academy Award for Best Picture in 2020?",
-    "What is the storyline of the video game The Last of Us?",
-    "How does Netflix decide what shows to recommend to users?",
-    "Can you explain the concept of the multiverse in science fiction?",
-    "What are the most popular genres of music in the 2020s?",
-    "What is the significance of the character Darth Vader in Star Wars?",
-    "How do board games like Settlers of Catan influence social interactions?"
+    "Who is the president of the United States?",
+    "What year was the Eiffel Tower completed?",
+    "Which anime features a character named Goku?",
+    "What is the capital of Japan?",
+    "Who created the video game 'Super Mario Bros.'?",
+    "Which country is home to the Great Wall of China?",
+    "What is the most-watched TV show of all time?",
+    "Where is the Statue of Liberty located?",
+    "Who won the 2018 FIFA World Cup?",
+    "Which city is known as the 'City of Lights'?"
 ]
 
 # Configuration
@@ -44,19 +44,19 @@ CONFIG = {
     "encoder_model_name": "intfloat/e5-base-v2",
     "reranker_model_name": "BAAI/bge-reranker-base",
     "generator_model_name": "google/flan-t5-large",
-    "faiss_index_name": "faiss_index.index",
-    "embeddings_name": "encoded_passages.npy",
-    "documents_name": "clean_documents.txt",
-    "answer_file": "answer.txt",
-    "retriever_top_k": 5,
-    "embedding_dim": 768,  # Set to 768 for E5 encoder model
+    "answer_file_path": "/content/RAG_Reranker_LLM/RAG_Reranker_LLM/answer.txt",
+    "faiss_index_name": "/content/RAG_Reranker_LLM/RAG_Reranker_LLM/faiss_index.index",
+    "embeddings_name": "/content/RAG_Reranker_LLM/RAG_Reranker_LLM/encoded_passages.npy",
+    "documents_name": "/content/RAG_Reranker_LLM/RAG_Reranker_LLM/clean_documents.txt",
+    "retriever_top_k": 10,
+    "embedding_dim": 768,
 
     # Generation settings
-    "num_beams": 1,               # Beam search disabled for now (using sampling)
-    "top_k": 50,                  # Limit to top 50 logits before sampling
-    "top_p": 0.95,                # Nucleus sampling for natural output
-    "temperature": 0.7,           # Controls randomness
-    "do_sample": True,            # Enable sampling-based generation
+    "num_beams": 3,
+    "top_k": 50,
+    "top_p": 0.9,
+    "temperature": 0.7,
+    "do_sample": True,
 
     # Retrieval toggles
     "use_dense_retrieval": True,
@@ -72,6 +72,10 @@ CONFIG = {
 EMBEDDINGS_PATH = CONFIG["embeddings_name"]
 DOCUMENTS_PATH = CONFIG["documents_name"]
 FAISS_INDEX_PATH = CONFIG["faiss_index_name"]
+ANSWER_FILE_PATH = CONFIG["answer_file_path"]  # Absolute path to answer file
+
+# Ensure the directory for the answer file exists
+os.makedirs(os.path.dirname(ANSWER_FILE_PATH), exist_ok=True)
 
 logging.disable(logging.CRITICAL)
 logger = logging.getLogger()
@@ -87,7 +91,7 @@ def load_data():
 def load_models():
     try:
         encoder_tokenizer = AutoTokenizer.from_pretrained(CONFIG["encoder_model_name"])
-        encoder_model = AutoModel.from_pretrained(CONFIG["encoder_model_name"]).to(device)
+        encoder_model = AutoModel.from_pretrained(CONFIG["encoder_model_name"]).to(device)  # Move to GPU
 
         reranker_tokenizer = AutoTokenizer.from_pretrained(CONFIG["reranker_model_name"])
         reranker = AutoModelForSequenceClassification.from_pretrained(CONFIG["reranker_model_name"]).to(device)
@@ -100,9 +104,6 @@ def load_models():
         print(f"Error loading models: {e}")
         return None
 
-def clean_text(text):
-    return re.sub(r'\s+', ' ', text.strip())
-
 def sanitize_context(text):
     text = re.sub(r'-lrb-', '(', text)
     text = re.sub(r'-rrb-', ')', text)
@@ -110,50 +111,15 @@ def sanitize_context(text):
     text = re.sub(r'[^a-zA-Z0-9\s.,;:!?\'\"()\-]', '', text)
     return text.strip()
 
-def save_embeddings_and_documents(embeddings, documents):
-    np.save(EMBEDDINGS_PATH, embeddings.cpu().numpy())
-    with open(DOCUMENTS_PATH, "w", encoding="utf-8") as f:
-        f.writelines([f"{doc}\n" for doc in documents])
-
-def load_embeddings_and_documents():
-    if not os.path.exists(EMBEDDINGS_PATH) or not os.path.exists(DOCUMENTS_PATH):
-        print(f"Embeddings or documents file not found at {EMBEDDINGS_PATH} or {DOCUMENTS_PATH}")
-        return None, None
-    try:
-        embeddings = torch.tensor(np.load(EMBEDDINGS_PATH))
-        with open(DOCUMENTS_PATH, "r", encoding="utf-8") as f:
-            documents = [line.strip() for line in f]
-        print(f"Successfully loaded embeddings with shape {embeddings.shape} and {len(documents)} documents.")
-        return embeddings, documents
-    except Exception as e:
-        print(f"Error loading embeddings and documents: {e}")
-        return None, None
-
-def save_faiss_index(index):
-    try:
-        faiss.write_index(index, FAISS_INDEX_PATH)
-    except Exception as e:
-        print(f"Error saving FAISS index: {e}")
-
-def load_faiss_index():
-    if os.path.exists(FAISS_INDEX_PATH):
-        try:
-            return faiss.read_index(FAISS_INDEX_PATH)
-        except Exception as e:
-            print(f"Error loading FAISS index: {e}")
-            return None
-    else:
-        return None
-
 def generate_embeddings(docs, encoder_tokenizer, encoder_model, num_docs, batch_size=32):
     embeddings, clean_docs = [], []
     for i in tqdm(range(0, num_docs, batch_size)):
-        batch_docs = [clean_text(docs[j]) for j in range(i, min(i + batch_size, num_docs)) if isinstance(docs[j], str)]
+        batch_docs = [sanitize_context(docs[j]) for j in range(i, min(i + batch_size, num_docs)) if isinstance(docs[j], str)]
         try:
-            inputs = encoder_tokenizer([f"passage: {doc}" for doc in batch_docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
+            inputs = encoder_tokenizer([f"passage: {doc}" for doc in batch_docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Move to GPU
             with torch.no_grad():
                 outputs = encoder_model(**inputs).last_hidden_state[:, 0, :]
-                embeddings.extend(outputs.cpu())
+                embeddings.extend(outputs.cpu())  # Move results back to CPU
                 clean_docs.extend(batch_docs)
         except Exception as e:
             print(f"Embedding batch error: {e}")
@@ -162,23 +128,23 @@ def generate_embeddings(docs, encoder_tokenizer, encoder_model, num_docs, batch_
 def create_faiss_index(embeddings):
     if embeddings.ndimension() != 2:
         raise ValueError(f"Embeddings should have shape (num_docs, embedding_dim), but got {embeddings.shape}")
-    
+
     # Normalize embeddings for cosine similarity (L2 normalization)
     faiss.normalize_L2(embeddings.cpu().numpy())  # In-place normalization
-    
+
     # Use IndexFlatIP for cosine similarity (inner product)
     index = faiss.IndexFlatIP(embeddings.shape[1])
-    
+
     try:
         index.add(embeddings.cpu().numpy())  # Add normalized embeddings to index
     except Exception as e:
         print(f"Error adding embeddings to FAISS index: {e}")
         return None
-    
+
     return index
 
 def rerank(query, docs, reranker_tokenizer, reranker, top_n=TOP_K):
-    inputs = reranker_tokenizer([[query, doc] for doc in docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
+    inputs = reranker_tokenizer([[query, doc] for doc in docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Move to GPU
     with torch.no_grad():
         scores = reranker(**inputs).logits.squeeze(-1)
     top_indices = torch.topk(scores, k=min(top_n, len(scores))).indices.tolist()
@@ -187,21 +153,21 @@ def rerank(query, docs, reranker_tokenizer, reranker, top_n=TOP_K):
     return [(doc, score) for doc, score in zip(reranked_docs, reranked_scores) if score >= CONFIDENCE_THRESHOLD]
 
 def encode_query(query, encoder_tokenizer, encoder_model, target_dim=EMBEDDING_DIM):
-    query_inputs = encoder_tokenizer(f"query: {query}", return_tensors="pt", truncation=True, padding=True).to(device)
+    query_inputs = encoder_tokenizer(f"query: {query}", return_tensors="pt", truncation=True, padding=True).to(device)  # Move to GPU
     query_embedding = encoder_model(**query_inputs).last_hidden_state[:, 0, :]
     if query_embedding.shape[1] != target_dim:
         query_embedding = query_embedding[:, :target_dim]
-    return query_embedding.detach().cpu().numpy().astype("float32")
+    return query_embedding.detach().cpu().numpy().astype("float32")  # Move results back to CPU
 
 def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator):
     try:
         # Debug: Print the query being processed
         logger.info(f"Processing query: {query}")
-        
+
         # Generate query embedding
         q_embedding = encode_query(query, encoder_tokenizer, encoder_model)
-        logger.info(f"Query embedding shape: {q_embedding.shape}")  # Log the shape of the query embedding
-        
+        logger.info(f"Query embedding shape: {q_embedding.shape}")
+
         # Ensure that the query embedding matches the FAISS index dimension
         if q_embedding.shape[1] != index.d:
             logger.error(f"Embedding dimension mismatch: query has {q_embedding.shape[1]} but FAISS index has {index.d}")
@@ -213,8 +179,8 @@ def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reran
         # Search the index with the query embedding
         k = min(TOP_K * 3, len(docs))
         distances, top_idxs = index.search(q_embedding, k=k)
-        logger.info(f"Top indices: {top_idxs}")  # Log the top indices retrieved
-        
+        logger.info(f"Top indices: {top_idxs}")
+
         retrieved_docs = [docs[i] for i in top_idxs[0]]
         reranked_docs_with_scores = rerank(query, retrieved_docs, reranker_tokenizer, reranker)
         reranked_docs = [doc for doc, _ in reranked_docs_with_scores]
@@ -226,7 +192,7 @@ def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reran
         Question: {query}
         Answer:"""
 
-        gen_inputs = generator_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
+        gen_inputs = generator_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Move to GPU
         output_ids = generator.generate(
             **gen_inputs,
             num_beams=CONFIG["num_beams"],
@@ -247,6 +213,62 @@ def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reran
         logger.error(traceback.format_exc())
         return f"Error in processing the query: {e}"
 
+def load_embeddings_and_documents():
+    if not os.path.exists(EMBEDDINGS_PATH) or not os.path.exists(DOCUMENTS_PATH) or not os.path.exists(FAISS_INDEX_PATH):
+        print("One or more required files are missing. Regenerating...")
+        # Regenerate documents and embeddings
+        regenerate_resources()
+    
+    try:
+        # Load the pre-saved embeddings and documents
+        embeddings = np.load(EMBEDDINGS_PATH)  # Load the pre-saved embeddings
+        with open(DOCUMENTS_PATH, "r", encoding="utf-8") as f:
+            clean_docs = f.readlines()  # Load the documents
+        return embeddings, clean_docs
+    except Exception as e:
+        print(f"Error loading embeddings or documents: {e}")
+        return None, None
+
+def regenerate_resources():
+    # Load the dataset
+    dataset = load_data()
+    if dataset is None:
+        print("Dataset loading failed.")
+        return
+
+    # Load the models
+    models = load_models()
+    if models is None or len(models) != 6:
+        print("Model loading failed.")
+        return
+
+    encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator = models
+
+    # Generate embeddings for documents
+    print("Generating embeddings for documents...")
+    embeddings, clean_docs = generate_embeddings(dataset["text"], encoder_tokenizer, encoder_model, num_docs=DOCS_TO_EMBED)
+
+    # Save the clean documents and embeddings
+    with open(DOCUMENTS_PATH, "w", encoding="utf-8") as f:
+        f.writelines(clean_docs)
+
+    np.save(EMBEDDINGS_PATH, embeddings.numpy())  # Save embeddings
+    print("Embeddings and documents saved successfully.")
+
+    # Create the FAISS index
+    print("Creating FAISS index...")
+    index = create_faiss_index(embeddings)
+    faiss.write_index(index, FAISS_INDEX_PATH)  # Save FAISS index
+    print("FAISS index created and saved successfully.")
+
+def load_faiss_index():
+    try:
+        index = faiss.read_index(FAISS_INDEX_PATH)  # Load the FAISS index
+        return index
+    except Exception as e:
+        print(f"Error loading FAISS index: {e}")
+        return None
+
 def main():
     print("Loading data...")
     dataset = load_data()
@@ -261,40 +283,26 @@ def main():
         return
 
     encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator = models
-
-    # Check if pre-existing embeddings, documents, and FAISS index are available
-    print("Checking for existing embeddings and FAISS index...")
+    print("Loading embeddings, documents, and FAISS index...")
     embeddings, clean_docs = load_embeddings_and_documents()
-    faiss_index = load_faiss_index()
+    index = load_faiss_index()
 
-    if embeddings is not None and clean_docs is not None and faiss_index is not None:
-        print("Loaded existing embeddings and FAISS index.")
-    else:
-        # If embeddings and FAISS index are not available, generate them
-        print("Generating embeddings...")
-        docs = [clean_text(doc) for doc in dataset["text"][:DOCS_TO_EMBED]]  # Adjust number of docs based on your setup
-        embeddings, clean_docs = generate_embeddings(docs, encoder_tokenizer, encoder_model, DOCS_TO_EMBED)
+    if embeddings is None or clean_docs is None or index is None:
+        print("Failed to load necessary resources.")
+        return
+        
+    answers = []
+    for query in QUERIES:
+        print(f"Answering query: {query}")
+        answer = run_rag_pipeline(query, index, clean_docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator)
+        print(f"Answer: {answer}\n")
+        answers.append((query, answer))
 
-        print("Creating FAISS index...")
-        faiss_index = create_faiss_index(embeddings)  # Use original embeddings directly
-        if faiss_index is None:
-            print("Failed to create FAISS index.")
-            return
+    # Now write all answers to the file
+    with open(ANSWER_FILE_PATH, 'w', encoding="utf-8") as f:  # Use 'w' to overwrite the file
+        for query, answer in answers:
+            f.write(f"Query: {query}\nAnswer: {answer}\n\n")  # Write each query-answer pair
 
-        # Save embeddings, documents, and FAISS index
-        print("Saving embeddings, documents, and FAISS index...")
-        save_embeddings_and_documents(embeddings, clean_docs)
-        save_faiss_index(faiss_index)
-
-    # Processing queries and writing to the file specified in the config
-    print("Processing queries...")
-    with open(CONFIG["answer_file"], "w", encoding="utf-8") as f:  # Use the config file path here
-        for query in QUERIES:
-            print(f"Query: {query}")
-            answer = run_rag_pipeline(query, faiss_index, clean_docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator)
-            print(f"Answer: {answer}\n")
-            f.write(f"Query: {query}\n")
-            f.write(f"Answer: {answer}\n\n")
 
 if __name__ == "__main__":
     main()
