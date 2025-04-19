@@ -1,0 +1,2 @@
+[console_scripts]
+data_clean = generic_rag.data_clean:main
