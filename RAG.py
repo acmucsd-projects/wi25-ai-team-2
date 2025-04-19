@@ -15,29 +15,31 @@ import numpy as np
 import multiprocessing
 from tqdm import tqdm
 import traceback
+import google.generativeai as genai
 
 # Setup
 multiprocessing.set_start_method('spawn', force=True)
 warnings.filterwarnings("ignore", message="resource_tracker: There appear to")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Hyperparameters
-EMBEDDING_DIM = 768  # Use the actual embedding dimension of the model
+# Hyperparameter
+EMBEDDING_DIM = 768
 TOP_K = 50
 DOCS_TO_EMBED = 5000
 CONFIDENCE_THRESHOLD = 0.7
 QUERIES = [
-    "What are the main differences between Xbox and PlayStation consoles?",
-    "How did the game Fortnite change the gaming industry?",
-    "What are the plot twists in the movie Inception?",
-    "Who won the Academy Award for Best Picture in 2020?",
-    "What is the storyline of the video game The Last of Us?",
-    "How does Netflix decide what shows to recommend to users?",
-    "Can you explain the concept of the multiverse in science fiction?",
-    "What are the most popular genres of music in the 2020s?",
-    "What is the significance of the character Darth Vader in Star Wars?",
-    "How do board games like Settlers of Catan influence social interactions?"
+    "What causes earthquakes and how are they measured?",
+    "Who were the main figures in the Russian Revolution?",
+    "How does CRISPR gene editing work in simple terms?",
+    "What is the difference between machine learning and deep learning?",
+    "What are the key differences between the Arctic and Antarctic regions?",
+    "Why did the Roman Empire fall?",
+    "How does the human immune system fight off viruses?",
+    "What are the symptoms and treatments of Parkinson’s disease?",
+    "What are black holes and how are they formed?",
+    "Explain the theory of general relativity in layman’s terms."
 ]
+
 
 # Configuration
 CONFIG = {
