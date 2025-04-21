@@ -2,4 +2,5 @@ clean_documents.txt
 encoded_passages.npy
 faiss_index.index
 answer.txt
+.DS_Store
 .venv/
