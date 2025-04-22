@@ -1,158 +1,139 @@
-import os
-import torch
-import logging
-import re
-import numpy as np
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModel, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
-import faiss
+import os, re, torch, faiss, numpy as np
 from tqdm import tqdm
-import google.generativeai as genai
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer, AutoModel, AutoModelForSequenceClassification,
+    AutoModelForCausalLM, BitsAndBytesConfig
+)
+import warnings; warnings.filterwarnings("ignore", message=".*HF_TOKEN.*")
 
-# Setup
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Config
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Ensure the code runs on GPU if available
+top_k, embedding_dim, docs_to_embed, batch_size = 30, 768, 5000, 16  # Define hyperparameters
+faiss_index_path = "/content/faiss_index.index"
+embedding_path = "/content/embeddings.npy"
+document_path = "/content/documents.txt"
+answer_path = "/content/answer.txt"
+queries = [
+    "What are black holes and how do they form?",
+    "How does photosynthesis work in plants?",
+    "What causes climate change and global warming?",
+    "Explain the theory of evolution by natural selection.",
+    "How does blockchain technology ensure data security?"
+]
 
-# Configuration
-CONFIG = {
-    "encoder_model_name": "intfloat/e5-base-v2",
-    "reranker_model_name": "BAAI/bge-reranker-base",
-    "generator_model_name": "google/flan-t5-large",
-    "faiss_index_name": "faiss_index.index",
-    "embeddings_name": "encoded_passages.npy",
-    "documents_name": "clean_documents.txt",
-    "answer_file": "answer.txt",
-    "top_k": 50,
-    "embedding_dim": 768,
-    "docs_to_embed": 5000,
-    "queries": [
-        "What causes earthquakes and how are they measured?",
-        "Who were the main figures in the Russian Revolution?",
-        "How does CRISPR gene editing work in simple terms?"
-    ]
-}
+# Model names
+encoder_model_name = "sentence-transformers/all-MiniLM-L6-v2"
+reranker_model_name = "cross-encoder/ms-marco-MiniLM-L6-v2"
+generator_model_name = "deepcogito/cogito-v1-preview-llama-3B"
 
-# Logger setup
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
+# Utilities
+def clean_text(t): return re.sub(r'\s+', ' ', t.strip())  # Clean extra spaces in text
+def split_chunks(t, max_len=256, stride=64):  # Split text into chunks for embedding
+    words = t.split(); return [" ".join(words[i:i+max_len]) for i in range(0, len(words), max_len - stride)]
 
-# Helper functions
-def load_data():
-    """Load the dataset from Wikipedia."""
-    return load_dataset("wikipedia", "20220301.en", split="train[:1%]", trust_remote_code=True)
+def save(embs, docs):
+    np.save(embedding_path, embs.cpu().numpy())  # Save embeddings to file
+    with open(document_path, "w", encoding="utf-8") as f: f.writelines(f"{doc}\n" for doc in docs)  # Save documents
 
-def load_models():
-    """Load the encoder, reranker, and generator models."""
-    encoder_tokenizer = AutoTokenizer.from_pretrained(CONFIG["encoder_model_name"])
-    encoder_model = AutoModel.from_pretrained(CONFIG["encoder_model_name"]).to(device)
+def load():
+    if not os.path.exists(embedding_path): return None, None  # If no saved embeddings exist, return None
+    embs = torch.tensor(np.load(embedding_path))  # Load saved embeddings
+    docs = open(document_path).read().splitlines()  # Load saved documents
+    return embs, docs
 
-    reranker_tokenizer = AutoTokenizer.from_pretrained(CONFIG["reranker_model_name"])
-    reranker = AutoModelForSequenceClassification.from_pretrained(CONFIG["reranker_model_name"]).to(device)
-
-    generator_tokenizer = AutoTokenizer.from_pretrained(CONFIG["generator_model_name"])
-    generator = AutoModelForSeq2SeqLM.from_pretrained(CONFIG["generator_model_name"]).to(device)
-
-    return encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator
-
-def clean_text(text):
-    """Clean up whitespace and sanitize text."""
-    return re.sub(r'\s+', ' ', text.strip())
-
-def save_embeddings_and_documents(embeddings, documents):
-    """Save embeddings and documents to disk."""
-    np.save(CONFIG["embeddings_name"], embeddings.cpu().numpy())
-    with open(CONFIG["documents_name"], "w", encoding="utf-8") as f:
-        f.writelines([f"{doc}\n" for doc in documents])
-
-def load_embeddings_and_documents():
-    """Load embeddings and documents from disk."""
-    if not os.path.exists(CONFIG["embeddings_name"]) or not os.path.exists(CONFIG["documents_name"]):
-        return None, None
-    embeddings = torch.tensor(np.load(CONFIG["embeddings_name"]))
-    with open(CONFIG["documents_name"], "r", encoding="utf-8") as f:
-        documents = [line.strip() for line in f]
-    return embeddings, documents
-
-def create_faiss_index(embeddings):
-    """Create and return a FAISS index from embeddings."""
-    faiss.normalize_L2(embeddings.cpu().numpy())
-    index = faiss.IndexFlatIP(embeddings.shape[1])
-    index.add(embeddings.cpu().numpy())
+def build_index(embs):
+    embs = embs.cpu().numpy().astype("float32")  # Convert embeddings to float32
+    faiss.normalize_L2(embs)  # Normalize embeddings for similarity search
+    index = faiss.IndexFlatIP(embs.shape[1])  # Create FAISS index
+    index.add(embs)  # Add embeddings to index
     return index
 
-def generate_embeddings(docs, encoder_tokenizer, encoder_model, batch_size=32):
-    """Generate embeddings for a batch of documents."""
-    embeddings, clean_docs = [], []
-    for i in tqdm(range(0, len(docs), batch_size)):
-        batch_docs = [clean_text(doc) for doc in docs[i:i+batch_size]]
-        inputs = encoder_tokenizer(batch_docs, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
-        with torch.no_grad():
-            outputs = encoder_model(**inputs).last_hidden_state[:, 0, :]
-            embeddings.extend(outputs.cpu())
-            clean_docs.extend(batch_docs)
-    return torch.stack(embeddings), clean_docs
+# Load models once
+def load_encoder():
+    t = AutoTokenizer.from_pretrained(encoder_model_name)  # Load tokenizer for encoder
+    m = AutoModel.from_pretrained(encoder_model_name, quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="auto")  # Load encoder model
+    return t, m
 
-def rerank(query, docs, reranker_tokenizer, reranker):
-    """Rerank the retrieved documents using the reranker model."""
-    inputs = reranker_tokenizer([[query, doc] for doc in docs], return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
-    with torch.no_grad():
-        scores = reranker(**inputs).logits.squeeze(-1)
-    top_indices = torch.topk(scores, k=min(CONFIG["top_k"], len(scores))).indices.tolist()
-    return [(docs[i], scores[i].item()) for i in top_indices]
+def load_reranker():
+    t = AutoTokenizer.from_pretrained(reranker_model_name)  # Load tokenizer for reranker
+    m = AutoModelForSequenceClassification.from_pretrained(reranker_model_name, quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="auto")  # Load reranker model
+    return t, m
 
-def encode_query(query, encoder_tokenizer, encoder_model):
-    """Encode a query into an embedding."""
-    query_inputs = encoder_tokenizer(query, return_tensors="pt", truncation=True, padding=True).to(device)
-    return encoder_model(**query_inputs).last_hidden_state[:, 0, :].detach().cpu().numpy()
+def load_generator():
+    t = AutoTokenizer.from_pretrained(generator_model_name)  # Load tokenizer for generator
+    t.pad_token = t.eos_token  # Set padding token
+    m = AutoModelForCausalLM.from_pretrained(generator_model_name, quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="auto")  # Load generator model
+    return t, m
 
-def generate_answer(query, context, generator_tokenizer, generator):
-    """Generate an answer to the query based on the context."""
-    input_text = f"Answer the following questions clearly and accurately in 1-2 sentences.\nQuestion: {query}\nAnswer:"
-    gen_inputs = generator_tokenizer(input_text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
-    output_ids = generator.generate(**gen_inputs, num_beams=1, max_new_tokens=50, no_repeat_ngram_size=2, top_p=0.95, temperature=0.7, do_sample=True)
-    return generator_tokenizer.decode(output_ids[0], skip_special_tokens=True)
+# Main steps
+def embed_documents(docs, tokenizer, model):
+    chunks = [chunk for d in docs for chunk in split_chunks(clean_text(d))]  # Split documents into smaller chunks
+    embeddings, flat_docs = [], []
+    for i in tqdm(range(0, len(chunks), batch_size), desc="Embedding"):  # Process in batches
+        batch = chunks[i:i+batch_size]
+        tokens = tokenizer(batch, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Tokenize and move to GPU
+        with torch.no_grad():  # No need to compute gradients for inference
+            embs = model(**tokens).last_hidden_state[:, 0, :].cpu()  # Get embeddings
+        embeddings.extend(embs); flat_docs.extend(batch)  # Collect embeddings and corresponding documents
+    return torch.stack(embeddings), flat_docs
 
-def run_rag_pipeline(query, index, docs, encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator):
-    """Run the RAG pipeline to generate an answer to a query."""
-    q_embedding = encode_query(query, encoder_tokenizer, encoder_model)
-    faiss.normalize_L2(q_embedding)
-    distances, top_idxs = index.search(q_embedding, CONFIG["top_k"])
-    retrieved_docs = [docs[i] for i in top_idxs[0]]
-    reranked_docs_with_scores = rerank(query, retrieved_docs, reranker_tokenizer, reranker)
-    context = " ".join([doc for doc, _ in reranked_docs_with_scores])[:2048]
-    return generate_answer(query, context, generator_tokenizer, generator)
+def encode_query(q, tokenizer, model):
+    toks = tokenizer(q, return_tensors="pt", truncation=True, padding=True).to(device)  # Tokenize query and move to GPU
+    with torch.no_grad():  # No need to compute gradients for inference
+        vec = model(**toks).last_hidden_state[:, 0, :].cpu().numpy().astype(np.float32)  # Get query embedding
+    faiss.normalize_L2(vec)  # Normalize query embedding for similarity search
+    return vec
+
+def rerank(query, docs, tokenizer, model):
+    scores = []
+    for i in range(0, len(docs), batch_size):  # Process in batches
+        pairs = [[query, d] for d in docs[i:i+batch_size]]  # Create query-document pairs
+        toks = tokenizer(pairs, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Tokenize pairs and move to GPU
+        with torch.no_grad():  # No need to compute gradients for inference
+            logits = model(**toks).logits.squeeze(-1).cpu()  # Get model scores for pairs
+        scores.extend(logits.tolist())  # Collect scores
+    idxs = torch.topk(torch.tensor(scores), min(top_k, len(scores))).indices.tolist()  # Get top-k scores
+    return [docs[i] for i in idxs]  # Return the top-k reranked documents
+
+def generate_answer(query, context, tokenizer, model):
+    prompt = f"Answer concisely and clearly based only on the context:\nContext: {context}\nQuestion: {query}\nAnswer:"  # Create prompt for LLM
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Tokenize prompt and move to GPU
+    output_ids = model.generate(**inputs, max_new_tokens=60, do_sample=True, temperature=0.7, top_k=50, top_p=0.9, return_dict_in_generate=True)  # Generate answer
+    answer = tokenizer.decode(output_ids.sequences[0], skip_special_tokens=True)  # Decode generated tokens
+    return answer.split("Answer:")[-1].strip()  # Extract and clean the answer
 
 def main():
-    """Main function to load data, models, and process queries."""
-    dataset = load_data()
-    if dataset is None:
-        logger.error("Failed to load dataset.")
-        return
+    # Load dataset
+    dataset = load_dataset("wikipedia", "20220301.en", split=f"train[:{docs_to_embed}]", cache_dir="/content/hf_cache", trust_remote_code=True)  # Load dataset from Hugging Face
+    raw_docs = [clean_text(doc) for doc in dataset["text"]]  # Clean raw documents
 
-    encoder_tokenizer, encoder_model, reranker_tokenizer, reranker, generator_tokenizer, generator = load_models()
+    # Load or build index
+    embeddings, flat_docs = load()  # Load saved embeddings if available
+    if embeddings is None:  # If no embeddings exist, create new ones
+        enc_tok, enc_model = load_encoder()
+        embeddings, flat_docs = embed_documents(raw_docs, enc_tok, enc_model)  # Generate embeddings for documents
+        index = build_index(embeddings)  # Build FAISS index for fast retrieval
+        save(embeddings, flat_docs)  # Save embeddings and documents
+        faiss.write_index(index, faiss_index_path)  # Save FAISS index
+    else:
+        index = faiss.read_index(faiss_index_path)  # Load existing FAISS index
 
-    embeddings, clean_docs = load_embeddings_and_documents()
-    faiss_index = faiss.read_index(CONFIG["faiss_index_name"]) if os.path.exists(CONFIG["faiss_index_name"]) else None
+    # Load models
+    enc_tok, enc_model = load_encoder()  # Load encoder model
+    rr_tok, rr_model = load_reranker()  # Load reranker model
+    gen_tok, gen_model = load_generator()  # Load generator model
 
-    if embeddings is None or clean_docs is None or faiss_index is None:
-        docs = [clean_text(doc) for doc in dataset["text"][:CONFIG["docs_to_embed"]]]
-        embeddings, clean_docs = generate_embeddings(docs, encoder_tokenizer, encoder_model)
-        faiss_index = create_faiss_index(embeddings)
-        save_embeddings_and_documents(embeddings, clean_docs)
-        faiss.write_index(faiss_index, CONFIG["faiss_index_name"])
-
-    with open(CONFIG["answer_file"], "w", encoding="utf-8") as f:
-        for query in CONFIG["queries"]:
-            answer = run_rag_pipeline(
-                query, faiss_index, clean_docs,
-                encoder_tokenizer, encoder_model,
-                reranker_tokenizer, reranker,
-                generator_tokenizer, generator
-            )
-
-            result = f"Query: {query}\nAnswer: {answer}\n\n"
-
-            print(result, end="")
-            f.write(result)
+    # Run pipeline
+    with open(answer_path, "w") as f:
+        for q in queries:  # Process each query
+            q_emb = encode_query(q, enc_tok, enc_model)  # Encode query
+            _, idxs = index.search(q_emb, top_k)  # Search for top-k relevant documents
+            candidates = [flat_docs[i] for i in idxs[0]]  # Get top-k candidate documents
+            reranked = rerank(q, candidates, rr_tok, rr_model)  # Rerank the documents
+            context = " ".join(reranked)[:2048]  # Create context for the answer (limit to 2048 tokens)
+            ans = generate_answer(q, context, gen_tok, gen_model)  # Generate answer based on context
+            f.write(f"Query: {q}\nAnswer: {ans}\n\n")  # Write query and answer to file
 
 if __name__ == "__main__":
-    main()
+    main()  # Run the main function

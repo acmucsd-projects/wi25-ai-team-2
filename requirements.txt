@@ -8,6 +8,7 @@ asgiref==3.8.1
 attrs==25.3.0
 backoff==2.2.1
 bcrypt==4.3.0
+bitsandbytes==0.42.0
 build==1.2.2.post1
 cachetools==5.5.2
 certifi==2025.1.31
@@ -25,6 +26,7 @@ dill==0.3.8
 distro==1.9.0
 duckdb==0.7.1
 durationpy==0.9
+evaluate==0.4.3
 faiss-cpu==1.10.0
 fastapi==0.115.9
 filelock==3.18.0
@@ -71,6 +73,7 @@ multiprocess==0.70.16
 networkx==3.4.2
 numpy==2.2.4
 oauthlib==3.2.2
+onnx==1.17.0
 onnxruntime==1.21.0
 opentelemetry-api==1.32.1
 opentelemetry-exporter-otlp-proto-common==1.32.1
@@ -82,6 +85,7 @@ opentelemetry-proto==1.32.1
 opentelemetry-sdk==1.32.1
 opentelemetry-semantic-conventions==0.53b1
 opentelemetry-util-http==0.53b1
+optimum==1.24.0
 orjson==3.10.16
 overrides==7.7.0
 packaging==24.2
@@ -128,7 +132,7 @@ threadpoolctl==3.6.0
 tokenizers==0.21.1
 torch==2.6.0
 tqdm==4.67.1
-transformers==4.51.3
+transformers==4.48.3
 typer==0.15.2
 typing-inspection==0.4.0
 typing_extensions==4.13.2
