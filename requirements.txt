@@ -20,6 +20,7 @@ chromadb==1.0.4
 click==8.1.8
 clickhouse-connect==0.6.6
 coloredlogs==15.0.1
+ctransformers==0.2.27
 datasets==3.5.0
 Deprecated==1.2.18
 dill==0.3.8
@@ -96,6 +97,7 @@ propcache==0.3.1
 proto-plus==1.26.1
 protobuf==5.29.4
 psutil==7.0.0
+py-cpuinfo==9.0.0
 pyarrow==19.0.1
 pyasn1==0.6.1
 pyasn1_modules==0.4.2

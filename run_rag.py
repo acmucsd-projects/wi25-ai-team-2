@@ -15,11 +15,16 @@ embedding_path = "/content/embeddings.npy"
 document_path = "/content/documents.txt"
 answer_path = "/content/answer.txt"
 queries = [
-    "What are black holes and how do they form?",
-    "How does photosynthesis work in plants?",
-    "What causes climate change and global warming?",
-    "Explain the theory of evolution by natural selection.",
-    "How does blockchain technology ensure data security?"
+    "What are gravitational waves and how are they detected?",
+    "How does the process of mitosis differ from meiosis?",
+    "What is dark matter and why is it important in cosmology?",
+    "How do neural networks mimic the human brain in AI systems?",
+    "What causes earthquakes and how are they measured?",
+    "What role did the Industrial Revolution play in shaping modern society?",
+    "How do plants adapt to extreme environments like deserts or tundras?",
+    "What are the ethical implications of artificial intelligence in healthcare?",
+    "How does the ozone layer protect life on Earth?",
+    "What is the role of enzymes in biological reactions?"
 ]
 
 # Model names
@@ -28,7 +33,9 @@ reranker_model_name = "cross-encoder/ms-marco-MiniLM-L6-v2"
 generator_model_name = "deepcogito/cogito-v1-preview-llama-3B"
 
 # Utilities
-def clean_text(t): return re.sub(r'\s+', ' ', t.strip())  # Clean extra spaces in text
+def clean_text(t):
+    return re.sub(r'\s+', ' ', t.strip())  # Clean extra spaces in text
+
 def split_chunks(t, max_len=256, stride=64):  # Split text into chunks for embedding
     words = t.split(); return [" ".join(words[i:i+max_len]) for i in range(0, len(words), max_len - stride)]
 
@@ -97,9 +104,9 @@ def rerank(query, docs, tokenizer, model):
     return [docs[i] for i in idxs]  # Return the top-k reranked documents
 
 def generate_answer(query, context, tokenizer, model):
-    prompt = f"Answer concisely and clearly based only on the context:\nContext: {context}\nQuestion: {query}\nAnswer:"  # Create prompt for LLM
+    prompt = f"Answer concisely using the context below. If insufficient, answer briefly from knowledge.\nContext: {context}\nQuestion: {query}"
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)  # Tokenize prompt and move to GPU
-    output_ids = model.generate(**inputs, max_new_tokens=60, do_sample=True, temperature=0.7, top_k=50, top_p=0.9, return_dict_in_generate=True)  # Generate answer
+    output_ids = model.generate(**inputs, max_new_tokens=150, do_sample=True, temperature=0.7, top_k=50, top_p=0.9, early_stopping=True, return_dict_in_generate=True)
     answer = tokenizer.decode(output_ids.sequences[0], skip_special_tokens=True)  # Decode generated tokens
     return answer.split("Answer:")[-1].strip()  # Extract and clean the answer
 

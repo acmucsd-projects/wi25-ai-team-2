@@ -1,7 +1,3 @@
-clean_documents.txt
-encoded_passages.npy
-faiss_index.index
-answer.txt
-data
 hf_cache
+answer.txt
 .venv/
