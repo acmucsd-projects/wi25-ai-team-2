@@ -1,6 +1,0 @@
-[project]
-name = "generic-rag"
-version = "0.1.0"
-
-[project.scripts]
-data_clean = "generic_rag.data_clean:main"

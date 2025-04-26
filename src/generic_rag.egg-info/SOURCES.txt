@@ -1,8 +1,0 @@
-pyproject.toml
-src/generic_rag/__init__.py
-src/generic_rag/data_clean.py
-src/generic_rag.egg-info/PKG-INFO
-src/generic_rag.egg-info/SOURCES.txt
-src/generic_rag.egg-info/dependency_links.txt
-src/generic_rag.egg-info/entry_points.txt
-src/generic_rag.egg-info/top_level.txt

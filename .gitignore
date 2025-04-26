@@ -9,3 +9,5 @@ env/
 .venv/
 
 data/
+trash/
+embedding_model/
