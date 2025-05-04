@@ -1,3 +1,6 @@
 hf_cache
 answer.txt
+documents.txt
+embeddings.npy
+faiss_index.index
 .venv/
