@@ -11,3 +11,4 @@ env/
 data/
 trash/
 embedding_model/
+offload/

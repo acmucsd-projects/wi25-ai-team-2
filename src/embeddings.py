@@ -38,24 +38,21 @@ def put_embeddings():
 
 		return mean_pooled[0].tolist()  # Convert tensor to list
 
-	with open(document_file, 'r', encoding='utf-8') as infile, open(output_file, 'w') as outfile:
+	with open(document_file, 'r', encoding='utf-8') as infile, open(output_file, 'w', encoding="utf-8") as outfile:
 		line_num = 0
 		for line in infile:
 			data = json.loads(line)
-			text = data.get("text", "")[:200]
 
-			inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
+			inputs = tokenizer(data.get("text")[:400], return_tensors="pt", truncation=True, padding=True)
 			embedding = get_embedding(inputs)
 
 			data["embedding"] = embedding
-			data.pop("text", None)
-			data.pop("title", None)
 
 			outfile.write(json.dumps(data, ensure_ascii=False) + "\n")
 
 			line_num += 1
-			if line_num % 100 == 0:
+			if line_num % 1000 == 0:
 				print(f"Processed {line_num} lines...")
 
 #save_model(MODEL_NAME)
-#put_embeddings()
+put_embeddings()
