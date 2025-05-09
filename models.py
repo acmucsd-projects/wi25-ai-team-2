@@ -50,8 +50,12 @@ def summarize(text, tokenizer, model, max_input_len=1024, max_output_len=150):
     )
     return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
-def generate_answer(query, context, tokenizer, model, max_new_tokens, temperature, top_p):
-    input_text = f"Question: {query}\nContext: {context}\nAnswer:"
+def generate_answer(query, wiki_context, ocr_context, tokenizer, model, max_new_tokens, temperature, top_p):
+    input_text = f"Question: {query}\n"
+    input_text += f"Most relevant information (OCR): {ocr_context}\n"
+    input_text += f"Additional reference (Wikipedia): {wiki_context}\n"
+    input_text += "Answer:"
+    
     inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(device)
     model.config.pad_token_id = model.config.eos_token_id
     outputs = model.generate(

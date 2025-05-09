@@ -1,6 +1,10 @@
+.venv/
 hf_cache
 answer.txt
+__pycache__
+output_pages
+ocr_docs.txt
 documents.txt
 embeddings.npy
+uploaded_files
 faiss_index.index
-.venv/

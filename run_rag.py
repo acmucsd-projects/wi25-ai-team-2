@@ -3,9 +3,11 @@ from tqdm import tqdm
 import torch
 import os
 
+# Import functions from OCR pipeline
+from ocr_pipeline import process_uploaded_files
 from utils import (
     clean_text, load, save, build_index, save_index, load_index,
-    clean_and_overwrite_answer_file, reset_memory
+    load_ocr_docs, clean_and_overwrite_answer_file, reset_memory
 )
 from models import (
     load_encoder, load_reranker, load_generator,
@@ -30,11 +32,7 @@ generator_model_name = "deepcogito/cogito-v1-preview-llama-3B"
 summarizer_model_name = "facebook/bart-large-cnn"
 
 queries = [
-    "How does photosynthesis work in plants?",
-    "What were the main causes of World War II?",
-    "What is the theory of general relativity?",
-    "How do vaccines help prevent diseases?",
-    "What are the functions of the human nervous system?"
+    "How should I start learning Fourier Transform?"
 ]
 
 # Load models (CPU or GPU if available)
@@ -68,14 +66,28 @@ else:
     index = build_index(embs)
     save_index(index)
 
+# Load OCR docs (if any)
+ocr_docs = load_ocr_docs()  # Ensure this function is defined in utils.py
+
+# If no OCR docs are loaded, process uploaded files to generate OCR content
+if not ocr_docs:
+    print("No OCR documents found. Processing uploaded files...")
+    # Process files (assuming OCR docs are saved as chunks in ocr_docs.txt)
+    chunks = process_uploaded_files(input_folder="uploaded_files", output_txt="ocr_docs.txt", chunk_size=300)
+    ocr_docs = chunks  # Load the OCR processed docs into ocr_docs
+
+ocr_context = " ".join(ocr_docs) if len(ocr_docs) > 0 else ""
+
 # Main RAG loop
 with open(answer_path, "w", encoding="utf-8") as f:
     for query in queries:
+        # Get top-k docs based on wiki context
         query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
         _, top_idx = index.search(query_emb.cpu().numpy(), top_k)
         candidates = [docs[i] for i in top_idx[0]]
         reranked = rerank(query, candidates, rr_tok, rr_model)
         context = " ".join(reranked[:top_k])[:2048]
+        
         sum_inputs = sum_tok(context, return_tensors="pt", max_length=1024, truncation=True).to(device)
         with torch.no_grad():
             summary_ids = sum_model.generate(
@@ -86,8 +98,8 @@ with open(answer_path, "w", encoding="utf-8") as f:
             )
         summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
 
-        # Generate answer based on summary
-        answer = generate_answer(query, summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+        # Generate answer based on both contexts (Wiki and OCR)
+        answer = generate_answer(query, summary, ocr_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
         f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")
 
 clean_and_overwrite_answer_file()
