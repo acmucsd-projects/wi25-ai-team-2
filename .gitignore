@@ -1,6 +1,7 @@
 .venv/
 hf_cache
 answer.txt
+.DS_Store
 __pycache__
 output_pages
 ocr_docs.txt
