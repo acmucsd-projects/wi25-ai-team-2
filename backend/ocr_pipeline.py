@@ -1,7 +1,6 @@
 import os
 from pdf2image import convert_from_path
 from paddleocr import PaddleOCR
-from PIL import Image
 import re
 
 # === Init OCR model ===

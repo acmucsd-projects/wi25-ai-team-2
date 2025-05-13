@@ -15,6 +15,16 @@ from models import (
 
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# File paths
+embedding_path = os.path.join(BASE_DIR, "documents_and_index/embeddings.npy")
+document_path = os.path.join(BASE_DIR, "documents_and_index/documents.txt")
+faiss_index_path = os.path.join(BASE_DIR, "documents_and_index/faiss_index.index")
+ocr_docs_path = os.path.join(BASE_DIR, "documents_and_index/ocr_docs.txt")
+answer_path = os.path.join(BASE_DIR, "answer.txt")
+input_folder = os.path.join(BASE_DIR, "uploaded_files")
+
 # Settings
 top_k = 10
 docs_to_embed = 5000
@@ -23,7 +33,6 @@ max_query_length = 256
 max_new_tokens = 200
 temperature = 0.7
 top_p = 0.9
-answer_path = "answer.txt"
 
 encoder_model_name = "BAAI/bge-base-en-v1.5"
 reranker_model_name = "BAAI/bge-reranker-large"
@@ -42,7 +51,7 @@ sum_tok = AutoTokenizer.from_pretrained(summarizer_model_name)
 sum_model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name).to(device)
 
 # Load or compute embeddings
-embs, docs = load()
+embs, docs = load(embedding_path, document_path)
 if embs is None or docs is None:
     wiki = load_dataset("wikipedia", "20220301.en", split=f"train[:{docs_to_embed}]", trust_remote_code=True)
     docs = [clean_text(ex["text"]) for ex in wiki]
@@ -56,23 +65,23 @@ if embs is None or docs is None:
             all_embs.append(embs_batch)
         reset_memory()
     embs = torch.cat(all_embs, dim=0)
-    save(embs, docs)
+    save(embs, docs, embedding_path, document_path)
 
 # Build or load FAISS
-if os.path.exists("faiss_index.index"):
-    index = load_index()
+if os.path.exists(faiss_index_path):
+    index = load_index(faiss_index_path)
 else:
     index = build_index(embs)
-    save_index(index)
+    save_index(index, faiss_index_path)
 
 # Load OCR docs (if any)
-ocr_docs = load_ocr_docs()
+ocr_docs = load_ocr_docs(ocr_docs_path)
 
 # If no OCR docs are loaded, process uploaded files to generate OCR content
 if not ocr_docs:
     print("No OCR documents found. Processing uploaded files...")
     # Process files (assuming OCR docs are saved as chunks in ocr_docs.txt)
-    chunks = process_uploaded_files(input_folder="uploaded_files", output_txt="ocr_docs.txt", chunk_size=300)
+    chunks = process_uploaded_files(input_folder, output_txt=ocr_docs_path, chunk_size=300)
     ocr_docs = chunks  # Load the OCR processed docs into ocr_docs
 
 ocr_context = " ".join(ocr_docs) if len(ocr_docs) > 0 else ""
@@ -101,5 +110,5 @@ with open(answer_path, "w", encoding="utf-8") as f:
         answer = generate_answer(query, summary, ocr_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
         f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")
 
-clean_and_overwrite_answer_file()
+clean_and_overwrite_answer_file(answer_path)
 print(f"Finished. Cleaned answers saved to: {answer_path}")
