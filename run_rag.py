@@ -3,7 +3,6 @@ from tqdm import tqdm
 import torch
 import os
 
-# Import functions from OCR pipeline
 from ocr_pipeline import process_uploaded_files
 from utils import (
     clean_text, load, save, build_index, save_index, load_index,
@@ -21,7 +20,7 @@ top_k = 10
 docs_to_embed = 5000
 batch_size = 8
 max_query_length = 256
-max_new_tokens = 100
+max_new_tokens = 200
 temperature = 0.7
 top_p = 0.9
 answer_path = "answer.txt"
@@ -32,7 +31,7 @@ generator_model_name = "deepcogito/cogito-v1-preview-llama-3B"
 summarizer_model_name = "facebook/bart-large-cnn"
 
 queries = [
-    "How should I start learning Fourier Transform?"
+    "How to find a Fourier Transform of a signal?"
 ]
 
 # Load models (CPU or GPU if available)
@@ -87,7 +86,7 @@ with open(answer_path, "w", encoding="utf-8") as f:
         candidates = [docs[i] for i in top_idx[0]]
         reranked = rerank(query, candidates, rr_tok, rr_model)
         context = " ".join(reranked[:top_k])[:2048]
-        
+
         sum_inputs = sum_tok(context, return_tensors="pt", max_length=1024, truncation=True).to(device)
         with torch.no_grad():
             summary_ids = sum_model.generate(

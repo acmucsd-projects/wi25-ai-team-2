@@ -1,31 +1,49 @@
 import torch
 from transformers import (
     AutoTokenizer, AutoModel, AutoModelForSequenceClassification,
-    AutoModelForCausalLM, AutoModelForSeq2SeqLM
+    AutoModelForCausalLM, AutoModelForSeq2SeqLM, BitsAndBytesConfig
 )
 
-# Enable GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def load_encoder(name):
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4"
+)
+
+def load_encoder(name, quantized=False):
     tokenizer = AutoTokenizer.from_pretrained(name)
-    model = AutoModel.from_pretrained(name).to(device)
+    if quantized:
+        model = AutoModel.from_pretrained(name, device_map="auto", quantization_config=bnb_config)
+    else:
+        model = AutoModel.from_pretrained(name).to(device)
     return tokenizer, model
 
-def load_reranker(name):
+def load_reranker(name, quantized=False):
     tokenizer = AutoTokenizer.from_pretrained(name)
-    model = AutoModelForSequenceClassification.from_pretrained(name).to(device)
+    if quantized:
+        model = AutoModelForSequenceClassification.from_pretrained(name, device_map="auto", quantization_config=bnb_config)
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(name).to(device)
     return tokenizer, model
 
-def load_summarizer(name):
+def load_summarizer(name, quantized=False):
     tokenizer = AutoTokenizer.from_pretrained(name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(name).to(device)
+    if quantized:
+        model = AutoModelForSeq2SeqLM.from_pretrained(name, device_map="auto", quantization_config=bnb_config)
+    else:
+        model = AutoModelForSeq2SeqLM.from_pretrained(name).to(device)
     return tokenizer, model
 
-def load_generator(model_name):
+def load_generator(model_name, quantized=False):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    if quantized:
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", quantization_config=bnb_config)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
     return tokenizer, model
 
 def encode_query(query, tokenizer, model, max_query_length):
@@ -55,7 +73,7 @@ def generate_answer(query, wiki_context, ocr_context, tokenizer, model, max_new_
     input_text += f"Most relevant information (OCR): {ocr_context}\n"
     input_text += f"Additional reference (Wikipedia): {wiki_context}\n"
     input_text += "Answer:"
-    
+
     inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(device)
     model.config.pad_token_id = model.config.eos_token_id
     outputs = model.generate(
