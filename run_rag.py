@@ -66,7 +66,7 @@ else:
     save_index(index)
 
 # Load OCR docs (if any)
-ocr_docs = load_ocr_docs()  # Ensure this function is defined in utils.py
+ocr_docs = load_ocr_docs()
 
 # If no OCR docs are loaded, process uploaded files to generate OCR content
 if not ocr_docs:
