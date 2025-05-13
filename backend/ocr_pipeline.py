@@ -34,7 +34,7 @@ def chunk_text(text, max_words=300):
     return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
 # === Full Pipeline ===
-def process_uploaded_files(input_folder="uploaded_files", output_txt="ocr_docs.txt", chunk_size=300):
+def process_uploaded_files(input_folder, output_txt, chunk_size=300):
     all_text = []
 
     for filename in os.listdir(input_folder):
