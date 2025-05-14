@@ -24,12 +24,13 @@ faiss_index_path = os.path.join(BASE_DIR, "documents_and_index/faiss_index.index
 ocr_docs_path = os.path.join(BASE_DIR, "documents_and_index/ocr_docs.txt")
 answer_path = os.path.join(BASE_DIR, "answer.txt")
 input_folder = os.path.join(BASE_DIR, "uploaded_files")
+output_pages = os.path.join(BASE_DIR, "output_pages")
 
 # Settings
 top_k = 10
 docs_to_embed = 5000
 batch_size = 8
-max_query_length = 256
+max_query_length = 512
 max_new_tokens = 200
 temperature = 0.7
 top_p = 0.9
@@ -40,7 +41,7 @@ generator_model_name = "deepcogito/cogito-v1-preview-llama-3B"
 summarizer_model_name = "facebook/bart-large-cnn"
 
 queries = [
-    "How to find a Fourier Transform of a signal?"
+    "How to find the surface integral of a vector field and explain the orientation of a surface?"
 ]
 
 # Load models (CPU or GPU if available)
@@ -81,7 +82,7 @@ ocr_docs = load_ocr_docs(ocr_docs_path)
 if not ocr_docs:
     print("No OCR documents found. Processing uploaded files...")
     # Process files (assuming OCR docs are saved as chunks in ocr_docs.txt)
-    chunks = process_uploaded_files(input_folder, output_txt=ocr_docs_path, chunk_size=300)
+    chunks = process_uploaded_files(input_folder, output_txt=ocr_docs_path, output_pages=output_pages, chunk_size=300)
     ocr_docs = chunks  # Load the OCR processed docs into ocr_docs
 
 ocr_context = " ".join(ocr_docs) if len(ocr_docs) > 0 else ""

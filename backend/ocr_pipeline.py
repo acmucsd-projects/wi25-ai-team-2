@@ -34,7 +34,7 @@ def chunk_text(text, max_words=300):
     return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
 # === Full Pipeline ===
-def process_uploaded_files(input_folder, output_txt, chunk_size=300):
+def process_uploaded_files(input_folder, output_txt, output_pages, chunk_size=300):
     all_text = []
 
     for filename in os.listdir(input_folder):
@@ -43,7 +43,7 @@ def process_uploaded_files(input_folder, output_txt, chunk_size=300):
 
         if filename.lower().endswith(".pdf"):
             pages = pdf_to_images(filepath)
-            img_dir = os.path.join("output_pages", os.path.splitext(filename)[0])
+            img_dir = os.path.join(output_pages, os.path.splitext(filename)[0])
             image_paths = save_images(pages, out_dir=img_dir)
         elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
             image_paths = [filepath]
