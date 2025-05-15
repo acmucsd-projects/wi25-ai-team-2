@@ -37,7 +37,7 @@ def load_summarizer(name, quantized=False):
         model = AutoModelForSeq2SeqLM.from_pretrained(name).to(device)
     return tokenizer, model
 
-def load_generator(model_name, quantized=False):
+def load_generator(model_name, quantized=True):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     if quantized:
