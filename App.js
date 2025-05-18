@@ -1,69 +1,88 @@
-import React, { useState } from 'react';
-import { View, Text, Button, TextInput, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
-
-const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok-free.app'
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  Button,
+  TextInput,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+  Alert,
+} from "react-native";
+import * as DocumentPicker from "expo-document-picker";
+import { LOCAL_BACKEND_URL } from '@env';
 
 export default function App() {
-  const [fileStatus, setFileStatus] = useState('');
-  const [query, setQuery] = useState('');
-  const [answer, setAnswer] = useState('');
+  const backendUrl = LOCAL_BACKEND_URL;
+
+  const [fileStatus, setFileStatus] = useState("");
+  const [query, setQuery] = useState("");
+  const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
 
   const pickAndUploadFile = async () => {
+    if (!backendUrl) {
+      Alert.alert("Backend URL not loaded yet");
+      return;
+    }
+
     try {
-      const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
-      if (res.type === 'cancel') return;
+      const res = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+      });
+      if (res.type === "cancel") return;
 
-      setFileStatus('Uploading...');
-      const uri = res.assets[0].uri;
-      const fileName = res.assets[0].name;
-      const fileType = res.assets[0].mimeType || 'application/octet-stream';
-
-      const fileData = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      setFileStatus("Uploading...");
+      const uri = res.uri || res.assets?.[0]?.uri;
+      const fileName = res.name || res.assets?.[0]?.name;
+      const fileType = res.mimeType || res.assets?.[0]?.mimeType || "application/octet-stream";
 
       const formData = new FormData();
-      formData.append('file', {
+      formData.append("file", {
         uri,
         name: fileName,
-        type: fileType
+        type: fileType,
       });
 
-      const response = await fetch(`${API_BASE}/upload/`, {
-        method: 'POST',
+      const response = await fetch(`${backendUrl}/upload/`, {
+        method: "POST",
         headers: {
-          'Content-Type': 'multipart/form-data',
+          "Content-Type": "multipart/form-data",
         },
-        body: formData
+        body: formData,
       });
 
       const data = await response.json();
-      setFileStatus(data.message);
+      setFileStatus(data.message || "Upload successful");
     } catch (err) {
       console.error(err);
-      setFileStatus('Upload failed.');
+      setFileStatus("Upload failed.");
     }
   };
 
   const submitQuery = async () => {
     if (!query.trim()) return;
 
+    if (!backendUrl) {
+      Alert.alert("Backend URL not loaded yet");
+      return;
+    }
+
     setLoading(true);
-    setAnswer('');
+    setAnswer("");
 
     try {
-      const response = await fetch(`${API_BASE}/query/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
+      const response = await fetch(`${backendUrl}/query/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
       });
 
       const data = await response.json();
-      setAnswer(data.answer);
+      setAnswer(data.answer || "No answer received");
     } catch (err) {
       console.error(err);
-      setAnswer('Error retrieving answer.');
+      setAnswer("Error retrieving answer.");
     } finally {
       setLoading(false);
     }
@@ -94,8 +113,8 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, padding: 20, justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 20 },
+  container: { flexGrow: 1, padding: 20, justifyContent: "center" },
+  title: { fontSize: 24, fontWeight: "bold", marginBottom: 20 },
   input: { borderWidth: 1, padding: 10, marginTop: 20, marginBottom: 10 },
-  answer: { marginTop: 20, fontSize: 16 }
+  answer: { marginTop: 20, fontSize: 16 },
 });

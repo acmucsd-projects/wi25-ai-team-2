@@ -9,6 +9,7 @@ import torch
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from contextlib import asynccontextmanager
 
 from ocr_pipeline import process_uploaded_files
 from utils import (
@@ -20,7 +21,7 @@ from models import (
     encode_query, rerank, generate_answer, device
 )
 
-BASE_DIR = "./backend"
+BASE_DIR = "."
 
 documents_and_index = os.path.join(BASE_DIR, "documents_and_index")
 embedding_path = os.path.join(documents_and_index, "embeddings.npy")
@@ -48,15 +49,6 @@ reranker_model_name = "BAAI/bge-reranker-large"
 generator_model_name = "deepcogito/cogito-v1-preview-llama-3B"
 summarizer_model_name = "facebook/bart-large-cnn"
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Globals initialized on startup
 gen_tok = gen_model = None
 enc_tok = enc_model = None
@@ -72,8 +64,8 @@ processed_files = set()
 
 public_url = None
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global gen_tok, gen_model
     global enc_tok, enc_model
     global rr_tok, rr_model
@@ -124,6 +116,18 @@ async def startup_event():
     # Initialize processed_files set with existing files in input_folder
     processed_files = set(os.listdir(input_folder))
 
+    yield  # Application runs here
+
+# Create FastAPI app with lifespan handler
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class QueryRequest(BaseModel):
     query: str
@@ -162,24 +166,31 @@ def answer_query(req: QueryRequest):
         ocr_docs = load_ocr_docs(ocr_docs_path)
     ocr_context = " ".join(ocr_docs) if ocr_docs else ""
 
-    # --- Step 1: Rerank user-uploaded OCR docs ---
-    user_reranked = rerank(query, ocr_docs, rr_tok, rr_model)
-    
-    # Set a basic threshold for what we consider a "high relevance" score (tweak as needed)
+    # --- Step 1: Rerank OCR docs and filter by score ---
+    user_reranked = rerank(query, ocr_docs, rr_tok, rr_model)  # returns list of (doc, score)
+
     relevance_threshold = 0.5
-    high_relevance_user_docs = [doc for doc, score in user_reranked if score > relevance_threshold]
+    high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
 
-    # --- Step 2: Supplement with Wikipedia docs if needed ---
-    needed_wiki_docs = top_k - len(high_relevance_user_docs)
-    final_docs = high_relevance_user_docs[:top_k]
+    # Sort again by score descending
+    high_relevance_user_docs.sort(key=lambda x: x[1], reverse=True)
+    high_relevance_docs = [doc for doc, _ in high_relevance_user_docs]
 
+    # Cap at top_k if too many high-score OCR docs
+    final_docs = high_relevance_docs[:top_k]
+    needed_wiki_docs = max(0, top_k - len(final_docs))
+
+    # --- Step 2: Pad with relevant Wikipedia docs if needed ---
     if needed_wiki_docs > 0:
         query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
-        _, top_idx = index.search(query_emb.cpu().numpy(), top_k)  # Get more to rerank thoroughly
+        _, top_idx = index.search(query_emb.cpu().numpy(), top_k)  # retrieve more for reranking quality
         wiki_candidates = [docs[i] for i in top_idx[0]]
-        wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)
-        wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
-        final_docs.extend(wiki_docs)
+
+        wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)  # (doc, score)
+        wiki_reranked.sort(key=lambda x: x[1], reverse=True)
+        top_wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
+
+        final_docs.extend(top_wiki_docs)
 
     # --- Step 3: Create context and summarize ---
     context = " ".join(final_docs)[:2048]

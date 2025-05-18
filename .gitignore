@@ -1,10 +1,36 @@
+# Ignore environment files and folders
 .env
 .venv/
-hf_cache
-frontend
+hf_cache/
+
+# Ignore entire frontend folder
+frontend/
+
+# OS-specific files
 .DS_Store
+Thumbs.db
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Backend generated and uploaded files
+backend/output_pages/
+backend/uploaded_files/
+backend/documents_and_index/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Editor and IDE files (optional)
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Other misc files
 answer.txt
-__pycache__
-output_pages
-uploaded_files
-documents_and_index

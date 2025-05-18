@@ -37,7 +37,7 @@ def load_summarizer(name, quantized=False):
         model = AutoModelForSeq2SeqLM.from_pretrained(name).to(device)
     return tokenizer, model
 
-def load_generator(model_name, quantized=True):
+def load_generator(model_name, quantized=False):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     if quantized:
@@ -55,8 +55,9 @@ def encode_query(query, tokenizer, model, max_query_length):
 def rerank(query, candidates, tokenizer, model):
     inputs = [tokenizer(query, doc, return_tensors="pt", padding=True, truncation=True).to(device) for doc in candidates]
     scores = [model(**input).logits.softmax(dim=-1).max().item() for input in inputs]
-    ranked = [doc for _, doc in sorted(zip(scores, candidates), reverse=True)]
-    return ranked
+    doc_scores = list(zip(candidates, scores))
+    doc_scores.sort(key=lambda x: x[1], reverse=True)
+    return doc_scores
 
 def summarize(text, tokenizer, model, max_input_len=512, max_output_len=150):
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_input_len).to(device)
