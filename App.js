@@ -3,7 +3,7 @@ import { View, Text, Button, TextInput, StyleSheet, ActivityIndicator, ScrollVie
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 
-const API_BASE = 'https://1234-56-789-012-345.ngrok-free.app'; // get real link from google colab
+const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok-free.app';
 
 export default function App() {
   const [fileStatus, setFileStatus] = useState('');

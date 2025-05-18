@@ -1,5 +1,6 @@
 .venv/
 hf_cache
+frontend
 .DS_Store
 answer.txt
 __pycache__

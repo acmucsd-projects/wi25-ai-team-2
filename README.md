@@ -43,7 +43,7 @@ const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok.io';
 
 ### 4. Run Frontend
 
-- In your terminal, navigate to the frontend folder.
+- In your terminal, run sudo npx create-expo-app frontend --template blank
 
 - Run:
 
@@ -58,3 +58,4 @@ Notes:
 - Make sure expo-cli is installed globally on your machine.
 - When running in Colab, keep the session alive to maintain the ngrok tunnel.
 - The React Native app uses the backend URL to upload files and query your OCR + RAG service.
+
