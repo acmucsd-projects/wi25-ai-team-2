@@ -162,12 +162,27 @@ def answer_query(req: QueryRequest):
         ocr_docs = load_ocr_docs(ocr_docs_path)
     ocr_context = " ".join(ocr_docs) if ocr_docs else ""
 
-    query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
-    _, top_idx = index.search(query_emb.cpu().numpy(), top_k)
-    candidates = [docs[i] for i in top_idx[0]]
-    reranked = rerank(query, candidates, rr_tok, rr_model)
-    context = " ".join(reranked[:top_k])[:2048]
+    # --- Step 1: Rerank user-uploaded OCR docs ---
+    user_reranked = rerank(query, ocr_docs, rr_tok, rr_model)
+    
+    # Set a basic threshold for what we consider a "high relevance" score (tweak as needed)
+    relevance_threshold = 0.5
+    high_relevance_user_docs = [doc for doc, score in user_reranked if score > relevance_threshold]
 
+    # --- Step 2: Supplement with Wikipedia docs if needed ---
+    needed_wiki_docs = top_k - len(high_relevance_user_docs)
+    final_docs = high_relevance_user_docs[:top_k]
+
+    if needed_wiki_docs > 0:
+        query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
+        _, top_idx = index.search(query_emb.cpu().numpy(), top_k)  # Get more to rerank thoroughly
+        wiki_candidates = [docs[i] for i in top_idx[0]]
+        wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)
+        wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
+        final_docs.extend(wiki_docs)
+
+    # --- Step 3: Create context and summarize ---
+    context = " ".join(final_docs)[:2048]
     sum_inputs = sum_tok(context, return_tensors="pt", max_length=1024, truncation=True).to(device)
     with torch.no_grad():
         summary_ids = sum_model.generate(
@@ -178,6 +193,7 @@ def answer_query(req: QueryRequest):
         )
     summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
 
+    # --- Step 4: Answer generation ---
     answer = generate_answer(query, summary, ocr_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
 
     with open(answer_path, "w", encoding="utf-8") as f:

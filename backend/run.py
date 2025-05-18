@@ -2,18 +2,30 @@ import os
 import nest_asyncio
 import uvicorn
 from pyngrok import ngrok
-import main  # your FastAPI app
+from dotenv import load_dotenv
+import main
 
-# Apply the patch to allow nested event loops
+# Load environment variables from .env file
+load_dotenv()
+
+# Apply patch for nested asyncio loops (required in notebooks or interactive environments)
 nest_asyncio.apply()
 
-# Kill existing ngrok tunnels (optional but avoids errors)
+# Set your ngrok authtoken (must be present in your .env file)
+auth_token = os.getenv("NGROK_AUTH_TOKEN")
+if not auth_token:
+    raise ValueError("Missing NGROK_AUTH_TOKEN in environment variables or .env file.")
+ngrok.set_auth_token(auth_token)
+
+# Kill any existing ngrok tunnels to avoid conflict
 ngrok.kill()
 
-# Connect ngrok to port 8000
+# Start a new ngrok tunnel on port 8000
 public_url = ngrok.connect(8000, bind_tls=True).public_url
 print(f"Public URL: {public_url}")
+
+# Set the public URL in your main app
 main.public_url = public_url
 
-# Run the app with uvicorn
+# Run the FastAPI app with uvicorn
 uvicorn.run(main.app, host="0.0.0.0", port=8000)
