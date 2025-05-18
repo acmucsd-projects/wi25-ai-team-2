@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { View, Text, Button, TextInput, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import { API_BASE } from './config';
 
-const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok-free.app';
+const API_URL = API_BASE;
+
 
 export default function App() {
   const [fileStatus, setFileStatus] = useState('');
@@ -30,7 +32,7 @@ export default function App() {
         type: fileType
       });
 
-      const response = await fetch(`${API_BASE}/upload/`, {
+      const response = await fetch(`${API_URL}/upload/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'multipart/form-data',
@@ -53,7 +55,7 @@ export default function App() {
     setAnswer('');
 
     try {
-      const response = await fetch(`${API_BASE}/query/`, {
+      const response = await fetch(`${API_URL}/query/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query })

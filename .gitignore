@@ -1,3 +1,4 @@
+.env
 .venv/
 hf_cache
 frontend
