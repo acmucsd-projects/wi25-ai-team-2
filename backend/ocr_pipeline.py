@@ -33,12 +33,11 @@ def chunk_text(text, max_words=300):
     words = text.split()
     return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
-# === Full Pipeline ===
-def process_uploaded_files(input_folder, output_txt, output_pages, chunk_size=300):
+def process_uploaded_files(file_paths, output_txt, output_pages, chunk_size=300):
     all_text = []
 
-    for filename in os.listdir(input_folder):
-        filepath = os.path.join(input_folder, filename)
+    for filepath in file_paths:
+        filename = os.path.basename(filepath)
         print(f"\n Processing: {filepath}")
 
         if filename.lower().endswith(".pdf"):

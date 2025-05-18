@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -8,6 +8,7 @@ import os
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 from ocr_pipeline import process_uploaded_files
 from utils import (
@@ -18,11 +19,9 @@ from models import (
     load_encoder, load_reranker, load_generator,
     encode_query, rerank, generate_answer, device
 )
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 BASE_DIR = "./backend"
 
-# File paths
 documents_and_index = os.path.join(BASE_DIR, "documents_and_index")
 embedding_path = os.path.join(documents_and_index, "embeddings.npy")
 document_path = os.path.join(documents_and_index, "documents.txt")
@@ -32,12 +31,10 @@ answer_path = os.path.join(BASE_DIR, "answer.txt")
 input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
 
-# Ensure folders exist
 os.makedirs(input_folder, exist_ok=True)
 os.makedirs(output_pages, exist_ok=True)
 os.makedirs(documents_and_index, exist_ok=True)
 
-# Settings
 top_k = 10
 docs_to_embed = 5000
 batch_size = 8
@@ -60,7 +57,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Declare globals that will be initialized on startup
+# Globals initialized on startup
 gen_tok = gen_model = None
 enc_tok = enc_model = None
 rr_tok = rr_model = None
@@ -70,6 +67,11 @@ docs = None
 index = None
 ocr_docs = []
 
+# Keep track of processed files to avoid re-processing
+processed_files = set()
+
+public_url = None
+
 @app.on_event("startup")
 async def startup_event():
     global gen_tok, gen_model
@@ -78,6 +80,7 @@ async def startup_event():
     global sum_tok, sum_model
     global embs, docs, index
     global ocr_docs
+    global processed_files
 
     print("Loading models...")
     gen_tok, gen_model = load_generator(generator_model_name)
@@ -118,27 +121,37 @@ async def startup_event():
     ocr_docs = load_ocr_docs(ocr_docs_path)
     print(f"OCR docs loaded: {len(ocr_docs)}")
 
-# API models
+    # Initialize processed_files set with existing files in input_folder
+    processed_files = set(os.listdir(input_folder))
+
+
 class QueryRequest(BaseModel):
     query: str
 
 @app.post("/upload/")
 async def upload_file(file: UploadFile = File(...)):
+    global processed_files
+    global ocr_docs
+
+    if file.filename in processed_files:
+        return {"message": f"File '{file.filename}' already processed."}
+
     save_path = Path(input_folder) / file.filename
     with save_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    processed_files.add(file.filename)
 
+    # Process only the newly uploaded file (pass list of file paths)
     chunks = process_uploaded_files(
-        input_folder=input_folder,
+        file_paths=[str(save_path)],
         output_txt=ocr_docs_path,
         output_pages=output_pages,
         chunk_size=300
     )
 
-    global ocr_docs
-    ocr_docs = chunks  # Update global OCR docs cache
+    ocr_docs = chunks
 
-    return {"message": f"Processed {file.filename}", "chunks": len(chunks)}
+    return {"message": f"Processed file '{file.filename}'.", "chunks": len(chunks)}
 
 @app.post("/query/")
 def answer_query(req: QueryRequest):
@@ -176,3 +189,21 @@ def answer_query(req: QueryRequest):
 @app.get("/status/")
 def get_status():
     return {"status": "ok"}
+
+@app.get("/ngrok_url/")
+def get_ngrok_url():
+    global public_url
+    if public_url is None:
+        return {"url": "Not set"}
+    return {"url": public_url}
+
+@app.post("/set_ngrok_url/")
+async def set_ngrok_url(req: Request):
+    global public_url
+    data = await req.json()
+    url = data.get("url")
+    if url:
+        public_url = url
+        return {"message": "ngrok URL updated", "url": public_url}
+    else:
+        return {"error": "Missing 'url' in request"}, 400

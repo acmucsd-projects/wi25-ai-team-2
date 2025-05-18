@@ -1,61 +1,53 @@
-# wi25-ai-team-2
+README for wi25-ai-team-2
 
-## Instructions
+Instructions:
 
-### 1. Run the Notebook in Google Colab
-
-- Open the notebook OCR_RAG_Reranker_LLM.ipynb in Google Colab (https://colab.research.google.com/).
-- Enable GPU:  
+1. Run the Notebook in Google Colab
+-----------------------------------
+- Open the notebook OCR_RAG_Reranker_LLM.ipynb in Google Colab: https://colab.research.google.com/
+- Enable GPU:
   Runtime > Change runtime type > Hardware accelerator > GPU
 - Run all cells.
 
-### 2. Setup ngrok in Your Backend
+2. Setup ngrok Authentication Token
+-----------------------------------
+- Create a `.env` file in your backend directory.
+- Add your ngrok auth token in the `.env` file as follows:
 
-Use the following code snippet in your Colab or backend script to start ngrok with your auth token and expose your FastAPI/uvicorn server:
+  NGROK_AUTH_TOKEN=your_ngrok_auth_token_here
 
-import nest_asyncio
-import uvicorn
-from pyngrok import ngrok
+- Make sure your backend code loads the `.env` file and uses this environment variable for ngrok.
 
-nest_asyncio.apply()
+3. Expose Backend via ngrok
+---------------------------
+- Run your backend (FastAPI + uvicorn).
+- The script will print a public URL like:
 
-NGROK_AUTH_TOKEN = "<INSERT_NGROK_TOKEN>"
-ngrok.set_auth_token(NGROK_AUTH_TOKEN)
+  https://xxxx-xx-xx-xx-xx.ngrok-free.app
 
-ngrok.kill()  # Kill previous tunnels if any
+- Copy this URL.
 
-public_url = ngrok.connect(8000)
-print("Public URL:", public_url)
+4. Setup Frontend React Native App
+----------------------------------
+- If you don’t have a React Native frontend yet, create one from scratch:
 
-uvicorn.run("main:app", host="0.0.0.0", port=8000)
+  sudo npx create-expo-app frontend --template blank
 
-- Replace <INSERT_NGROK_TOKEN> with your actual ngrok auth token.
+- Copy your existing `App.js` file into the newly created `frontend` folder.
 
-- The script will print a public URL like https://xxxx-xx-xx-xx-xx.ngrok.io — copy this URL.
+- Open `frontend/App.js` and replace the existing `API_BASE` URL with the ngrok public URL you copied, for example:
 
-### 3. Update Frontend App.js
+  const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok-free.app';
 
-- In the frontend folder, open App.js.
+5. Run Frontend
+---------------
+- Create or open your React Native frontend folder.
+- Run the frontend with:
 
-- Replace the existing API_BASE URL with your copied ngrok URL, for example:
-
-const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok.io';
-
-### 4. Run Frontend
-
-- In your terminal, run sudo npx create-expo-app frontend --template blank
-
-- Run:
-
-sudo npx expo start
-
-- This will launch the React Native frontend, connected to your backend running through ngrok.
-
----
+  sudo npx expo start
 
 Notes:
-
-- Make sure expo-cli is installed globally on your machine.
-- When running in Colab, keep the session alive to maintain the ngrok tunnel.
-- The React Native app uses the backend URL to upload files and query your OCR + RAG service.
-
+------
+- Ensure `expo-cli` is installed globally.
+- Keep Colab sessions alive to maintain the ngrok tunnel if running there.
+- The React Native app uses the backend URL to connect and interact with your OCR + RAG service.
