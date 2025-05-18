@@ -2,16 +2,16 @@
 
 ### Instructions
 
-1. Run the Notebook in Google Colab
 -----------------------------------
+1. Run the Notebook in Google Colab
 - Open the notebook `OCR_RAG_Reranker_LLM.ipynb` in Google Colab: https://colab.research.google.com/
 - Enable GPU acceleration:
   - Runtime > Change runtime type
   - Hardware accelerator > GPU
 - Run all cells.
 
-2. Set Up ngrok Authentication Token
 ------------------------------------
+2. Set Up ngrok Authentication Token
 - In your backend directory, create a `.env` file.
 - Add your ngrok auth token as follows:
   
@@ -19,8 +19,8 @@
 
 - Ensure your backend code loads this `.env` file and uses this environment variable.
 
-3. Expose Backend via ngrok
 ---------------------------
+3. Expose Backend via ngrok
 - Run your backend server (FastAPI + uvicorn).
 - The script will print a public URL like:
   
@@ -28,8 +28,8 @@
 
 - Copy this URL.
 
-4. Set Up Frontend React Native App
 -----------------------------------
+4. Set Up Frontend React Native App
 - If you don’t have a React Native frontend yet, create one by running:
 
   sudo npx create-expo-app frontend --template blank
@@ -39,8 +39,8 @@
 
   const API_BASE = 'https://xxxx-xx-xx-xx-xx.ngrok-free.app';
 
-5. Run Frontend
 ---------------
+5. Run Frontend
 - Navigate to your frontend folder.
 - Start the app with:
 
