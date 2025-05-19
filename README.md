@@ -22,9 +22,7 @@ This project implements a "Second Brain" app with:
 
     pip install -r requirements.txt
 
-- Start the backend server (e.g., uvicorn):
-
-    uvicorn main:app --host 0.0.0.0 --port 8000
+- Start the backend server by running run.py in the backend folder
 
 ---
 
@@ -41,7 +39,7 @@ This project implements a "Second Brain" app with:
 - Copy your existing `App.js` and `babel.config.js` into the new `frontend` folder.
 
 - In your React Native code, import and use your backend URL from environment  
-  variables using your preferred method (e.g., `react-native-dotenv`).
+  variables using `react-native-dotenv`.
 
 - Run the frontend:
 
