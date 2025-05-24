@@ -165,8 +165,10 @@ def answer_query(req: QueryRequest):
 
     # --- Step 1: Rerank OCR docs and filter by score ---
     user_reranked = rerank(query, ocr_docs, rr_tok, rr_model)  # returns list of (doc, score)
+    for (i,j) in user_reranked:
+        print(j)
 
-    relevance_threshold = 0.5
+    relevance_threshold = -2.5
     high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
 
     # Sort again by score descending
@@ -189,20 +191,45 @@ def answer_query(req: QueryRequest):
 
         final_docs.extend(top_wiki_docs)
 
-    # --- Step 3: Create context and summarize ---
-    context = " ".join(final_docs)[:2048]
-    sum_inputs = sum_tok(context, return_tensors="pt", max_length=1024, truncation=True).to(device)
-    with torch.no_grad():
-        summary_ids = sum_model.generate(
-            sum_inputs["input_ids"],
-            max_length=256,
-            num_beams=4,
-            early_stopping=True
-        )
-    summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
+    # --- Step 3: Summarize each doc individually and join ---
+    summarized_docs = []
+    for doc in final_docs:
+        sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
+        with torch.no_grad():
+            summary_ids = sum_model.generate(
+                sum_inputs["input_ids"],
+                max_length=256,
+                num_beams=4,
+                early_stopping=True
+            )
+        summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
+        summarized_docs.append(summary)
 
-    # --- Step 4: Answer generation ---
-    answer = generate_answer(query, summary, ocr_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+    wiki_context = " ".join(summarized_docs)
+
+    # --- Step 4: Summarize each OCR doc individually ---
+    ocr_summary = ""
+    if ocr_docs:
+        summarized_ocr_docs = []
+        for doc in ocr_docs:
+            if doc.strip():
+                sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
+                with torch.no_grad():
+                    summary_ids = sum_model.generate(
+                        sum_inputs["input_ids"],
+                        max_length=256,
+                        num_beams=4,
+                        early_stopping=True
+                    )
+                summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
+                summarized_ocr_docs.append(summary)
+        ocr_summary = " ".join(summarized_ocr_docs)
+  
+    print(ocr_summary)
+    print("\n\n\n\n\n")
+    print(wiki_context)
+    
+    answer = generate_answer(query, wiki_context, ocr_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
 
     with open(answer_path, "w", encoding="utf-8") as f:
         f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")

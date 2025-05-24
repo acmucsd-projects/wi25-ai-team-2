@@ -63,8 +63,7 @@ This project implements a "Second Brain" app with:
 
 ## Notes
 
-- Keep backend running with active ngrok tunnel while using frontend.  
-- Update frontend `.env` if ngrok URL changes.  
+- Keep backend running with active ngrok tunnel while using frontend. 
 - Install `expo-cli` globally if not already:
 
     npm install -g expo-cli

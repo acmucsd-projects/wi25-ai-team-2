@@ -54,7 +54,7 @@ def encode_query(query, tokenizer, model, max_query_length):
 
 def rerank(query, candidates, tokenizer, model):
     inputs = [tokenizer(query, doc, return_tensors="pt", padding=True, truncation=True).to(device) for doc in candidates]
-    scores = [model(**input).logits.softmax(dim=-1).max().item() for input in inputs]
+    scores = [model(**input).logits[0].item() for input in inputs]
     doc_scores = list(zip(candidates, scores))
     doc_scores.sort(key=lambda x: x[1], reverse=True)
     return doc_scores
