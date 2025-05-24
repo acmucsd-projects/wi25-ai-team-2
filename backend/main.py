@@ -32,10 +32,6 @@ answer_path = os.path.join(BASE_DIR, "answer.txt")
 input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
 
-os.makedirs(input_folder, exist_ok=True)
-os.makedirs(output_pages, exist_ok=True)
-os.makedirs(documents_and_index, exist_ok=True)
-
 top_k = 10
 docs_to_embed = 5000
 batch_size = 8
@@ -73,6 +69,10 @@ async def lifespan(app: FastAPI):
     global embs, docs, index
     global ocr_docs
     global processed_files
+    
+    os.makedirs(input_folder, exist_ok=True)
+    os.makedirs(output_pages, exist_ok=True)
+    os.makedirs(documents_and_index, exist_ok=True)
 
     print("Loading models...")
     gen_tok, gen_model = load_generator(generator_model_name)
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
         save_index(index, faiss_index_path)
 
     ocr_docs = load_ocr_docs(ocr_docs_path)
-    print(f"OCR docs loaded: {len(ocr_docs)}")
+    print(f"OCR docs loaded")
 
     # Initialize processed_files set with existing files in input_folder
     processed_files = set(os.listdir(input_folder))
@@ -146,16 +146,13 @@ async def upload_file(file: UploadFile = File(...)):
     processed_files.add(file.filename)
 
     # Process only the newly uploaded file (pass list of file paths)
-    chunks = process_uploaded_files(
+    ocr_docs = process_uploaded_files(
         file_paths=[str(save_path)],
         output_txt=ocr_docs_path,
         output_pages=output_pages,
-        chunk_size=300
     )
 
-    ocr_docs = chunks
-
-    return {"message": f"Processed file '{file.filename}'.", "chunks": len(chunks)}
+    return {"message": f"Processed file '{file.filename}'."}
 
 @app.post("/query/")
 def answer_query(req: QueryRequest):
@@ -216,21 +213,3 @@ def answer_query(req: QueryRequest):
 @app.get("/status/")
 def get_status():
     return {"status": "ok"}
-
-@app.get("/ngrok_url/")
-def get_ngrok_url():
-    global public_url
-    if public_url is None:
-        return {"url": "Not set"}
-    return {"url": public_url}
-
-@app.post("/set_ngrok_url/")
-async def set_ngrok_url(req: Request):
-    global public_url
-    data = await req.json()
-    url = data.get("url")
-    if url:
-        public_url = url
-        return {"message": "ngrok URL updated", "url": public_url}
-    else:
-        return {"error": "Missing 'url' in request"}, 400

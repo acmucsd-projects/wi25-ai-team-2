@@ -24,6 +24,18 @@ ngrok.kill()
 public_url = ngrok.connect(8000, bind_tls=True).public_url
 print(f"Public URL: {public_url}")
 
+# Path to your frontend config file
+frontend_config_path = '../frontend/config.js'
+
+# Make sure the directory exists
+os.makedirs(os.path.dirname(frontend_config_path), exist_ok=True)
+
+# Write the dynamic API base URL to the frontend config.js
+with open(frontend_config_path, 'w') as f:
+    f.write(f"export const API_BASE = '{public_url}';\n")
+
+print(f"Wrote backend URL to {frontend_config_path}")
+
 # Set the public URL in your main app
 main.public_url = public_url
 

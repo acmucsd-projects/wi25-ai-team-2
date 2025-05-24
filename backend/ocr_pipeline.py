@@ -33,32 +33,30 @@ def chunk_text(text, max_words=300):
     words = text.split()
     return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
-def process_uploaded_files(file_paths, output_txt, output_pages, chunk_size=300):
-    all_text = []
+def process_uploaded_files(file_paths, output_txt, output_pages):
+    with open(output_txt, "a", encoding="utf-8") as f:  # Append mode
 
-    for filepath in file_paths:
-        filename = os.path.basename(filepath)
-        print(f"\n Processing: {filepath}")
+        for filepath in file_paths:
+            filename = os.path.basename(filepath)
+            print(f"\n Processing: {filepath}")
 
-        if filename.lower().endswith(".pdf"):
-            pages = pdf_to_images(filepath)
-            img_dir = os.path.join(output_pages, os.path.splitext(filename)[0])
-            image_paths = save_images(pages, out_dir=img_dir)
-        elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
-            image_paths = [filepath]
-        else:
-            print(f"Skipping unsupported file: {filename}")
-            continue
+            if filename.lower().endswith(".pdf"):
+                pages = pdf_to_images(filepath)
+                img_dir = os.path.join(output_pages, os.path.splitext(filename)[0])
+                image_paths = save_images(pages, out_dir=img_dir)
+            elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
+                image_paths = [filepath]
+            else:
+                print(f"Skipping unsupported file: {filename}")
+                continue
 
-        for img_path in image_paths:
-            text = extract_text_with_paddleocr(img_path)
-            all_text.append(clean_text(text))
+            all_text = []
+            for img_path in image_paths:
+                text = extract_text_with_paddleocr(img_path)
+                all_text.append(clean_text(text))
 
-    full_text = "\n\n".join(all_text)
-    chunks = chunk_text(full_text, max_words=chunk_size)
-
-    with open(output_txt, "w", encoding="utf-8") as f:
-        f.write("\n\n".join(chunks))
+            # One line per file
+            one_line = " ".join(all_text)
+            f.write(one_line + "\n")  # Write one line per file
 
     print(f"\n OCR complete. Output saved to: {output_txt}")
-    return chunks
