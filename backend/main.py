@@ -165,8 +165,6 @@ def answer_query(req: QueryRequest):
 
     # --- Step 1: Rerank OCR docs and filter by score ---
     user_reranked = rerank(query, ocr_docs, rr_tok, rr_model)  # returns list of (doc, score)
-    for (i,j) in user_reranked:
-        print(j)
 
     relevance_threshold = -2.5
     high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
@@ -224,11 +222,7 @@ def answer_query(req: QueryRequest):
                 summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
                 summarized_ocr_docs.append(summary)
         ocr_summary = " ".join(summarized_ocr_docs)
-  
-    print(ocr_summary)
-    print("\n\n\n\n\n")
-    print(wiki_context)
-    
+        
     answer = generate_answer(query, wiki_context, ocr_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
 
     with open(answer_path, "w", encoding="utf-8") as f:
