@@ -1,6 +1,7 @@
 import os
 from pdf2image import convert_from_path
 from paddleocr import PaddleOCR
+from models import summarize
 import re
 
 # === Init OCR model ===
@@ -37,10 +38,10 @@ def process_uploaded_files(
 	file_paths,
 	output_txt=None,
 	output_pages=None,
-	summarize=False,
 	summarizer_tokenizer=None,
 	summarizer_model=None
 ):
+
 	all_docs = []
 
 	if output_txt is not None:
@@ -48,7 +49,7 @@ def process_uploaded_files(
 
 	for filepath in file_paths:
 		filename = os.path.basename(filepath)
-		print(f"\n Processing: {filepath}")
+		print(f"\nProcessing: {filepath}")
 
 		if filename.lower().endswith(".pdf"):
 			pages = pdf_to_images(filepath)
@@ -66,15 +67,13 @@ def process_uploaded_files(
 
 		lines = chunk_text(all_text)
 
-		if summarize and summarizer_tokenizer and summarizer_model:
-			summarized_lines = []
-			for i, line in enumerate(lines):
-				print(f"Summarizing chunk {i+1}/{len(lines)}...")
-				summarized_line = summarize(
-					line, summarizer_tokenizer, summarizer_model
-				)
-				summarized_lines.append(summarized_line)
-			lines = summarized_lines
+		# Always summarize
+		summarized_lines = []
+		for i, line in enumerate(lines):
+			print(f"Summarizing chunk {i+1}/{len(lines)}...")
+			summarized_line = summarize(line, summarizer_tokenizer, summarizer_model)
+			summarized_lines.append(summarized_line)
+		lines = summarized_lines
 
 		all_docs.extend(lines)
 

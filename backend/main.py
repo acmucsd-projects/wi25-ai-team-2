@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, Query, File
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -140,10 +140,7 @@ class QueryRequest(BaseModel):
 	query: str
 
 @app.post("/upload/")
-async def upload_file(
-	file: UploadFile = File(...),
-	summarize: bool = Query(False)  # allows /upload/?summarize=true
-):
+async def upload_file(file: UploadFile = File(...)):
 	global processed_files
 	global user_docs
 
@@ -160,12 +157,11 @@ async def upload_file(
 		file_paths=[str(save_path)],
 		output_txt=user_docs_path,
 		output_pages=output_pages,
-		summarize=summarize,
 		summarizer_tokenizer=summarizer_tokenizer,
 		summarizer_model=summarizer_model
 	)
 
-	return {"message": f"Processed file '{file.filename}' with summarize={summarize}."}
+	return {"message": f"Processed file '{file.filename}'"}
 
 @app.post("/query/")
 def answer_query(req: QueryRequest):
@@ -174,7 +170,6 @@ def answer_query(req: QueryRequest):
 	global user_docs
 	if not user_docs:
 		user_docs = load_user_docs(user_docs_path)
-	user_context = " ".join(user_docs) if user_docs else ""
 
 	# --- Step 1: Rerank user docs and filter by score ---
 	user_reranked = rerank(query, user_docs, rr_tok, rr_model)  # returns list of (doc, score)
@@ -201,24 +196,10 @@ def answer_query(req: QueryRequest):
 		top_wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
 
 		final_docs.extend(top_wiki_docs)
+  
+	wiki_context = " ".join(final_docs)
 
-	# --- Step 3: Summarize each doc individually and join ---
-	summarized_docs = []
-	for doc in final_docs:
-		sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
-		with torch.no_grad():
-			summary_ids = sum_model.generate(
-				sum_inputs["input_ids"],
-				max_length=256,
-				num_beams=4,
-				early_stopping=True
-			)
-		summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
-		summarized_docs.append(summary)
-
-	wiki_context = " ".join(summarized_docs)
-
-	# --- Step 4: Summarize each user doc individually ---
+	# --- Step 3: Summarize each user doc individually ---
 	user_summary = ""
 	if user_docs:
 		summarized_user_docs = []
