@@ -2,9 +2,8 @@
 .env
 .venv/
 hf_cache/
-
-# Ignore entire frontend folder
-frontend/
+*.env
+*.gitignore
 
 # OS-specific files
 .DS_Store
@@ -20,6 +19,7 @@ __pycache__/
 backend/output_pages/
 backend/uploaded_files/
 backend/documents_and_index/
+backend/docs_output.txt
 
 # Logs and temporary files
 *.log
@@ -33,4 +33,4 @@ backend/documents_and_index/
 *.swo
 
 # Other misc files
-answer.txt
+backend/answer.txt
