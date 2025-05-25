@@ -78,36 +78,36 @@ This project implements a "Second Brain" app with:
 
 ## OCR + RAG Pipeline Summary
 
-OCR Phase
+### OCR Phase
 ---------
 - Users upload scanned documents (e.g., PDFs, images).
 - Files are saved and OCR is applied to extract raw text (via `process_uploaded_files()`).
 - Each extracted text chunk is **immediately summarized** using `facebook/bart-large-cnn` to reduce future token usage.
 - Summarized text is appended line-by-line to a persistent file (`ocr_docs.txt`) for future queries.
 
-Query Phase
+### Query Phase
 -----------
 - User submits a natural language question via the `/query/` endpoint.
 - The system loads summarized OCR content from `ocr_docs.txt`.
 
-Optional Padding with Wikipedia
+### Optional Padding with Wikipedia
 -------------------------------
 - If fewer than `top_k` user OCR docs are present, Wikipedia content is retrieved to supplement.
 - Wikipedia docs are pre-embedded at startup using the `bge-base-en-v1.5` encoder and indexed with FAISS.
 - These are retrieved by embedding similarity, then reranked using the `bge-reranker-large` cross-encoder.
 
-Summarization Step (Wikipedia Only)
+### Summarization Step (Wikipedia Only)
 -----------------------------------
 - Retrieved Wikipedia docs are summarized individually using `facebook/bart-large-cnn`.
 - Summarized Wikipedia docs are concatenated into `wiki_context`.
 
-LLM Answer Generation
+### LLM Answer Generation
 ---------------------
 - A final prompt is constructed using the user's query, summarized Wikipedia context, and top summarized OCR chunks.
 - This prompt is passed to the generator model (`deepcogito/cogito-v1-preview-llama-3B`).
 - The generated answer is returned and saved to `answer.txt`.
 
-Code Logic Highlights
+### Code Logic Highlights
 ---------------------
 - OCR summarization happens right after file upload in `process_uploaded_files()`.
 - Query logic, Wikipedia fallback, summarization, and generation are in the `/query/` endpoint (`main.py`).
