@@ -55,10 +55,10 @@ def clean_and_overwrite_answer_file(file_path):
         f.write(cleaned_output.strip())
     print(f"Answers cleaned and saved to: {file_path}")
 
-def load_ocr_docs(ocr_file):
-    """Load and clean OCR documents from a file."""
-    if os.path.exists(ocr_file):
-        with open(ocr_file, "r", encoding="utf-8") as file:
-            ocr_docs = file.readlines()
-        return [clean_text(doc) for doc in ocr_docs]
+def load_user_docs(user_file):
+    """Load and clean documents from a file."""
+    if os.path.exists(user_file):
+        with open(user_file, "r", encoding="utf-8") as file:
+            user_docs = file.readlines()
+        return [clean_text(doc) for doc in user_docs]
     return []
