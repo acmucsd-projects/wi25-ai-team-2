@@ -62,12 +62,14 @@ def rerank(query, candidates, tokenizer, model):
 
 def summarize(text, tokenizer, model, max_input_len=512, max_output_len=150):
 	inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_input_len).to(device)
+	print("summarizing")
 	summary_ids = model.generate(
 		inputs["input_ids"],
 		max_length=max_output_len,
 		num_beams=4,
 		early_stopping=True
 	)
+	print("SUMMARIZED")
 	return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
 def generate_answer(query, wiki_context, user_context, tokenizer, model, max_new_tokens, temperature, top_p):
@@ -86,4 +88,5 @@ def generate_answer(query, wiki_context, user_context, tokenizer, model, max_new
 		temperature=temperature,
 		top_p=top_p,
 	)
+
 	return tokenizer.decode(outputs[0], skip_special_tokens=True).split("Answer:")[1].strip()

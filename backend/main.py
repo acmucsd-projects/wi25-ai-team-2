@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Request
+from fastapi import FastAPI, UploadFile, Query, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -16,8 +16,6 @@ if torch.cuda.is_available():
 	print(f"Using device: {torch.cuda.get_device_name(0)}")
 else:
 	print("CUDA is not available.")
-	
-
 
 from ocr_pipeline import process_uploaded_files
 from utils import (
@@ -25,28 +23,30 @@ from utils import (
 	load_user_docs, clean_and_overwrite_answer_file, reset_memory
 )
 from models import (
-	load_encoder, load_reranker, load_generator,
-	encode_query, rerank, generate_answer, device
+	load_encoder, load_reranker, load_generator,load_summarizer,
+	encode_query, rerank, generate_answer, summarize, device
 )
 
 BASE_DIR = "."
 
 documents_and_index = os.path.join(BASE_DIR, "documents_and_index")
 embedding_path = os.path.join(documents_and_index, "embeddings.npy")
-document_path = os.path.join(documents_and_index, "documents.txt")
+document_path = os.path.join(documents_and_index, "wiki_docs.txt")
 faiss_index_path = os.path.join(documents_and_index, "faiss_index.index")
 user_docs_path = os.path.join(documents_and_index, "user_docs.txt")
 answer_path = os.path.join(BASE_DIR, "answer.txt")
 input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
 
-top_k = 5
+top_k = 3
 docs_to_embed = 1000
 batch_size = 8
 max_query_length = 256
 max_new_tokens = 100
 temperature = 0.7
 top_p = 0.9
+
+relevance_threshold = -2.5
 
 encoder_model_name = "BAAI/bge-base-en-v1.5"
 reranker_model_name = "BAAI/bge-reranker-large"
@@ -58,6 +58,7 @@ gen_tok = gen_model = None
 enc_tok = enc_model = None
 rr_tok = rr_model = None
 sum_tok = sum_model = None
+summarizer_tokenizer, summarizer_model = load_summarizer(summarizer_model_name)
 embs = None
 docs = None
 index = None
@@ -141,7 +142,9 @@ class QueryRequest(BaseModel):
 	query: str
 
 @app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+	file: UploadFile = File(...),
+):
 	global processed_files
 	global user_docs
 
@@ -158,6 +161,8 @@ async def upload_file(file: UploadFile = File(...)):
 		file_paths=[str(save_path)],
 		output_txt=user_docs_path,
 		output_pages=output_pages,
+		summarizer_tokenizer=summarizer_tokenizer,
+		summarizer_model=summarizer_model
 	)
 
 	return {"message": f"Processed file '{file.filename}'."}
@@ -165,81 +170,52 @@ async def upload_file(file: UploadFile = File(...)):
 @app.post("/query/")
 def answer_query(req: QueryRequest):
 	query = req.query
+	print(query)
 
 	global user_docs
 	if not user_docs:
 		user_docs = load_user_docs(user_docs_path)
-	user_context = " ".join(user_docs) if user_docs else ""
 
 	# --- Step 1: Rerank user docs and filter by score ---
 	user_reranked = rerank(query, user_docs, rr_tok, rr_model)  # returns list of (doc, score)
-
-	relevance_threshold = -2.5
-	high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
-
-	# Sort again by score descending
-	high_relevance_user_docs.sort(key=lambda x: x[1], reverse=True)
-	high_relevance_docs = [doc for doc, _ in high_relevance_user_docs]
+	user_reranked_relevant = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
+	user_reranked_relevant.sort(key=lambda x: x[1], reverse=True) # sort by score
+	chosen_user_docs = [doc for doc, _ in user_reranked_relevant] # remove score from each tuple
 
 	# Cap at top_k if too many high-score user docs
-	final_docs = high_relevance_docs[:top_k]
-	needed_wiki_docs = max(0, top_k - len(final_docs))
-	
-	#with open("docs_output.txt", "a") as f:
-	#	for doc in final_docs:
-	#		f.write(doc + '\n\n\n')
+	num_wiki_docs = max(0, top_k - len(chosen_user_docs))
+	chosen_wiki_docs = []
+
+	print("step 1")
 
 	# --- Step 2: Pad with relevant Wikipedia docs if needed ---
-	if needed_wiki_docs > 0:
+	max_wiki_doc_len = 300
+
+	if num_wiki_docs > 0:
 		query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
 		_, top_idx = index.search(query_emb.cpu().numpy(), top_k)  # retrieve more for reranking quality
-		wiki_candidates = [docs[i] for i in top_idx[0]]
+		wiki_docs = [docs[i] for i in top_idx[0]]
 
-		wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)  # (doc, score)
-		wiki_reranked.sort(key=lambda x: x[1], reverse=True)
-		top_wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
+		wiki_reranked = rerank(query, wiki_docs, rr_tok, rr_model)  # returns list of (doc, score)
+		wiki_reranked_relevant = [(doc, score) for doc, score in wiki_reranked if score > relevance_threshold]
+		wiki_reranked_relevant.sort(key=lambda x: x[1], reverse=True)
+		chosen_wiki_docs = [doc for doc, _ in wiki_reranked[:num_wiki_docs]]
 
-		final_docs.extend(top_wiki_docs)
 
-	# --- Step 3: Summarize each doc individually and join ---
-	summarized_docs = []
-	for doc in final_docs:
-		sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
-		with torch.no_grad():
-			summary_ids = sum_model.generate(
-				sum_inputs["input_ids"],
-				max_length=256,
-				num_beams=4,
-				early_stopping=True
-			)
-		summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
-		summarized_docs.append(summary)
+	print(chosen_user_docs)
+	print(chosen_wiki_docs)
+	user_context = " ".join(chosen_user_docs)
+	wiki_context = " ".join(chosen_wiki_docs)
 
-	wiki_context = " ".join(summarized_docs)
-
-	# --- Step 4: Summarize each user doc individually ---
-	user_summary = ""
-	if user_docs:
-		summarized_user_docs = []
-		for doc in user_docs:
-			if doc.strip():
-				sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
-				with torch.no_grad():
-					summary_ids = sum_model.generate(
-						sum_inputs["input_ids"],
-						max_length=256,
-						num_beams=4,
-						early_stopping=True
-					)
-				summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
-				summarized_user_docs.append(summary)
-		user_summary = " ".join(summarized_user_docs)
+	print("step 2")
 		
-	answer = generate_answer(query, wiki_context, user_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+	answer = generate_answer(query, wiki_context, user_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+
+	print("answer made")
 
 	with open(answer_path, "w", encoding="utf-8") as f:
 		f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")
-	clean_and_overwrite_answer_file(answer_path)
+	#clean_and_overwrite_answer_file(answer_path)
 
 	return JSONResponse(content={"answer": answer})
 

@@ -1,6 +1,7 @@
 import os
 from pdf2image import convert_from_path
 from paddleocr import PaddleOCR
+from models import summarize 
 import re
 
 # === Init OCR model ===
@@ -33,30 +34,54 @@ def chunk_text(text, max_words=300):
 	words = text.split()
 	return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
-def process_uploaded_files(file_paths, output_txt, output_pages):
-	with open(output_txt, "a", encoding="utf-8") as f:  # Append mode
+def process_uploaded_files(
+	file_paths,
+	output_txt=None,
+	output_pages=None,
+	summarizer_tokenizer=None,
+	summarizer_model=None
+):
+	all_docs = []
 
-		for filepath in file_paths:
-			filename = os.path.basename(filepath)
-			print(f"\n Processing: {filepath}")
+	if output_txt is not None:
+		os.makedirs(os.path.dirname(output_txt), exist_ok=True)
 
-			if filename.lower().endswith(".pdf"):
-				pages = pdf_to_images(filepath)
-				img_dir = os.path.join(output_pages, os.path.splitext(filename)[0])
-				image_paths = save_images(pages, out_dir=img_dir)
-			elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
-				image_paths = [filepath]
-			else:
-				print(f"Skipping unsupported file: {filename}")
-				continue
+	for filepath in file_paths:
+		filename = os.path.basename(filepath)
+		print(f"\n Processing: {filepath}")
 
-			all_text = ""
-			for img_path in image_paths:
-				all_text = all_text + (clean_text(extract_text_with_paddleocr(img_path)))
+		if filename.lower().endswith(".pdf"):
+			pages = pdf_to_images(filepath)
+			img_dir = os.path.join(output_pages or "output_pages", os.path.splitext(filename)[0])
+			image_paths = save_images(pages, out_dir=img_dir)
+		elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
+			image_paths = [filepath]
+		else:
+			print(f"Skipping unsupported file: {filename}")
+			continue
 
-			one_line = " ".join(all_text)
-			lines = chunk_text(all_text)
-			for line in lines:
-				f.write(line + "\n")  # Write one line per file
+		all_text = ""
+		for img_path in image_paths:
+			all_text += clean_text(extract_text_with_paddleocr(img_path))
 
-	print(f"\n OCR complete. Output saved to: {output_txt}")
+		lines = chunk_text(all_text)
+
+		# Always summarize
+		summarized_lines = []
+		for i, line in enumerate(lines):
+			print(f"Summarizing chunk {i+1}/{len(lines)}...")
+			summarized_line = summarize(line, summarizer_tokenizer, summarizer_model)
+			summarized_lines.append(summarized_line)
+		lines = summarized_lines
+
+		all_docs.extend(lines)
+
+		if output_txt:
+			with open(output_txt, "a", encoding="utf-8") as f:
+				for line in lines:
+					f.write(line + "\n")
+
+	if output_txt:
+		print(f"\n OCR complete. Output saved to: {output_txt}")
+
+	return all_docs
