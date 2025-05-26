@@ -42,7 +42,7 @@ input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
 
 top_k = 5
-docs_to_embed = 10
+docs_to_embed = 1000
 batch_size = 8
 max_query_length = 256
 max_new_tokens = 100
