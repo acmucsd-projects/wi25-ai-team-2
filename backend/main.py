@@ -27,13 +27,13 @@ from utils import (
 )
 from models import (
     load_encoder, load_reranker, load_generator, load_summarizer,
-    encode_query, rerank, generate_answer, device
+    encode_query, summarize, rerank, generate_answer, device
 )
 
 BASE_DIR = "."
 
 documents_and_index = os.path.join(BASE_DIR, "documents_and_index")
-embedding_path = os.path.join(documents_and_index, "embeddings.npy")  # saved as numpy file
+embedding_path = os.path.join(documents_and_index, "embeddings.npy")
 document_path = os.path.join(documents_and_index, "documents.txt")
 faiss_index_path = os.path.join(documents_and_index, "faiss_index.index")
 user_docs_path = os.path.join(documents_and_index, "user_docs.txt")
@@ -46,6 +46,7 @@ docs_to_embed = 1000
 batch_size = 8
 max_query_length = 256
 max_new_tokens = 100
+relevance_threshold = -2.5
 temperature = 0.7
 top_p = 0.9
 
@@ -203,45 +204,44 @@ def answer_query(req: QueryRequest):
     if not user_docs:
         user_docs = load_user_docs(user_docs_path)
 
-    # Rerank user docs
+    # Rerank user docs and filter by relevance threshold
     user_reranked = rerank(query, user_docs, rr_tok, rr_model)
-    relevance_threshold = -2.5
     high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
     high_relevance_user_docs.sort(key=lambda x: x[1], reverse=True)
     high_relevance_docs = [doc for doc, _ in high_relevance_user_docs]
 
-    final_docs = high_relevance_docs[:top_k]
-    needed_wiki_docs = max(0, top_k - len(final_docs))
+    # Take up to top_k relevant user docs for user_summary
+    user_summary_docs = high_relevance_docs[:top_k]
 
-    # Pad with Wikipedia docs if needed
+    needed_wiki_docs = max(0, top_k - len(user_summary_docs))
+    summarized_wiki_docs = []
+
     if needed_wiki_docs > 0:
+        # Get query embedding
         query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
         _, top_idx = index.search(query_emb.cpu().numpy(), top_k)
         wiki_candidates = [docs[i] for i in top_idx[0]]
 
+        # Rerank wiki candidates
         wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)
+        # Filter by relevance threshold
+        wiki_reranked = [(doc, score) for doc, score in wiki_reranked if score > relevance_threshold]
+        # Sort descending by score
         wiki_reranked.sort(key=lambda x: x[1], reverse=True)
+        # Pick top needed wiki docs after threshold filtering
         top_wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
 
-        # Summarize each top Wikipedia doc
-        summarized_wiki_docs = []
-        for doc in top_wiki_docs:
-            if doc.strip():
-                sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
-                with torch.no_grad():
-                    summary_ids = sum_model.generate(
-                        sum_inputs["input_ids"],
-                        max_length=256,
-                        num_beams=4,
-                        early_stopping=True,
-                    )
-                summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
-                summarized_wiki_docs.append(summary)
+        # Summarize wiki docs
+        summarized_wiki_docs = [
+            summarize(doc[:2048], sum_tok, sum_model, max_input_len=1024, max_output_len=150)
+            for doc in top_wiki_docs if doc.strip()
+        ]
 
-        final_docs.extend(summarized_wiki_docs)
-
-    wiki_context = " ".join(final_docs)
-    user_summary = " ".join(user_docs)
+    wiki_context = "\n\n".join(summarized_wiki_docs)
+    user_summary = "\n\n".join(user_summary_docs)
+    
+    if not user_summary_docs and not summarized_wiki_docs:
+        return JSONResponse(content={"answer": "Sorry, I couldn't find any relevant information to answer that."})
 
     answer = generate_answer(query, wiki_context, user_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
 
