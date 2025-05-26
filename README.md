@@ -1,12 +1,21 @@
-## wi25-ai-team-2
+## WI25-AI-TEAM-2
+
+This project implements a "Second Brain" system — a personal AI assistant that
+answers questions based on your uploaded documents, with optional fallback
+support from Wikipedia.
 
 ---
 
-## Overview
+## Project Structure
 
-This project implements a "Second Brain" app with:  
-- Backend: FastAPI OCR + RAG pipeline prioritizing user docs over Wikipedia  
-- Frontend: React Native (Expo) app for file upload and querying
+### Backend (FastAPI + Ngrok)
+- OCR + RAG (Retrieval-Augmented Generation) pipeline
+- Prioritizes user-uploaded documents
+- Fallback to Wikipedia only when needed
+
+### Frontend (React Native + Expo)
+- Mobile/web interface
+- Supports file upload and natural language querying
 
 ---
 
@@ -14,95 +23,102 @@ This project implements a "Second Brain" app with:
 
 ### 1. Backend Setup
 
-- Create a `.env` file inside the `backend` folder with:
+1. Create a `.env` file in the `backend/` directory:
 
-    NGROK_AUTH_TOKEN="your_ngrok_auth_token_here"
+       NGROK_AUTH_TOKEN="your_ngrok_auth_token_here"
 
-- Install backend dependencies:
+2. Install dependencies:
 
-    pip install -r requirements.txt
+       pip install -r requirements.txt
 
-- Start the backend server by running:
+3. Run the backend:
 
-    python run.py
+       python run.py
 
-> This will start the FastAPI backend and initialize the ngrok tunnel for external access.
+This starts the FastAPI server and exposes it using an ngrok tunnel.
 
 ---
 
 ### 2. Frontend Setup (React Native / Expo)
 
-- Create a React Native frontend by running:
+1. Create the frontend project:
 
-    sudo npx create-expo-app frontend --template blank
+       npx create-expo-app frontend --template blank
 
-- Create a `.env` file in the `frontend` folder with your backend URL:
+2. Create a `.env` file in `frontend/`:
 
-    LOCAL_BACKEND_URL="http://your_backend_url_here"
+       LOCAL_BACKEND_URL="http://your_backend_url_here"
 
-- Copy your existing `App.js` and `babel.config.js` into the new `frontend` folder.
+3. Copy your existing `App.js` and `babel.config.js` into the `frontend/` folder.
 
-- In your React Native code, import and use the backend URL from environment  
-  variables using `react-native-dotenv`.
+4. Use `react-native-dotenv` to import environment variables.
 
-- Run the frontend with **web support**:
+5. Start the frontend in web mode:
 
-    cd frontend  
-    npx expo start -w
+       cd frontend
+       npx expo start -w
 
-> The `-w` flag opens the app in your browser.
+To support this, install the Expo CLI if needed:
+
+       npm install -g expo-cli
 
 ---
 
 ## Document Retrieval Logic
 
-- Backend prioritizes user-uploaded documents when answering queries.  
-- It tries to retrieve up to `top_k` user docs.  
-- Filters out low-relevance user docs.  
-- If fewer than `top_k` relevant user docs remain, supplements with Wikipedia docs  
-  to reach `top_k` total.  
-- Ensures answers mainly rely on user content; Wikipedia is fallback only.
+- Retrieves up to `top_k` user-uploaded documents based on similarity
+- Filters out low-relevance user docs
+- If fewer than `top_k` are relevant, supplements with Wikipedia documents
+- Final answers prioritize user content; Wikipedia is used only as fallback
+
+---
+
+## OCR + RAG Pipeline
+
+### OCR Phase
+- Users upload scanned documents (PDFs/images)
+- Text is extracted via OCR in `process_uploaded_files()`
+- Each text chunk is summarized immediately with `facebook/bart-large-cnn`
+- Summarized results are stored line-by-line in `ocr_docs.txt`
+
+### Query Phase
+- User submits a question to the `/query/` endpoint
+- System loads summarized user docs from `ocr_docs.txt`
+- Top relevant documents are selected using `bge-reranker-large`
+
+### Wikipedia Fallback (Optional)
+- If needed, Wikipedia docs are retrieved using FAISS index built on
+  `bge-base-en-v1.5` embeddings
+- Top docs are summarized using the same BART model
+
+### Answer Generation
+- A prompt is constructed from:
+  - User question
+  - Summarized OCR content
+  - (Optional) summarized Wikipedia docs
+- The generator model `deepcogito/cogito-v1-preview-llama-3B` produces the final answer
+- Answer is saved to `answer.txt` and returned to the user
+
+---
+
+## Code Highlights
+
+- `process_uploaded_files()` handles OCR and summarization
+- `/query/` handles:
+  - Retrieval of relevant documents
+  - Reranking
+  - Wikipedia fallback
+  - Prompt construction and LLM generation
+- Configurable parameters:
+  - `top_k`
+  - similarity thresholds
+  - summarization model
+  - Wikipedia fallback toggle
 
 ---
 
 ## Notes
 
-- Keep the backend running with an active ngrok tunnel while using the frontend. 
-- Install `expo-cli` globally if not already:
-
-    npm install -g expo-cli
-
-- Backend CORS is enabled for frontend requests.
-
----
-
-## OCR + RAG Pipeline Summary
-
-### OCR Phase
-- Users upload scanned documents (e.g., PDFs, images).
-- Files are saved and OCR is applied to extract raw text (via `process_uploaded_files()`).
-- Each extracted text chunk is **immediately summarized** using `facebook/bart-large-cnn` to reduce future token usage.
-- Summarized text is appended line-by-line to a persistent file (`ocr_docs.txt`) for future queries.
-
-### Query Phase
-- User submits a natural language question via the `/query/` endpoint.
-- The system loads summarized OCR content from `ocr_docs.txt`.
-
-### Optional Padding with Wikipedia
-- If fewer than `top_k` user OCR docs are present, Wikipedia content is retrieved to supplement.
-- Wikipedia docs are pre-embedded at startup using the `bge-base-en-v1.5` encoder and indexed with FAISS.
-- These are retrieved by embedding similarity, then reranked using the `bge-reranker-large` cross-encoder.
-
-### Summarization Step (Wikipedia Only)
-- Retrieved Wikipedia docs are summarized individually using `facebook/bart-large-cnn`.
-- Summarized Wikipedia docs are concatenated into `wiki_context`.
-
-### LLM Answer Generation
-- A final prompt is constructed using the user's query, summarized Wikipedia context, and top summarized OCR chunks.
-- This prompt is passed to the generator model (`deepcogito/cogito-v1-preview-llama-3B`).
-- The generated answer is returned and saved to `answer.txt`.
-
-### Code Logic Highlights
-- OCR summarization happens right after file upload in `process_uploaded_files()`.
-- Query logic, Wikipedia fallback, summarization, and generation are in the `/query/` endpoint (`main.py`).
-- You can configure `top_k`, thresholds, summarization model, or disable Wikipedia fallback.
+- Keep the backend server and ngrok tunnel running during frontend use
+- Make sure `.env` files are correctly configured in both frontend and backend
+- CORS is enabled on the backend to support frontend requests
