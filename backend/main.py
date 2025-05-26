@@ -10,6 +10,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from contextlib import asynccontextmanager
+import time
 
 if torch.cuda.is_available():
 	print("CUDA is available!")
@@ -20,7 +21,7 @@ else:
 from ocr_pipeline import process_uploaded_files
 from utils import (
 	clean_text, load, save, build_index, save_index, load_index,
-	load_user_docs, clean_and_overwrite_answer_file, reset_memory
+	load_user_docs, clean_and_overwrite_answer_file, chunk_text, reset_memory
 )
 from models import (
 	load_encoder, load_reranker, load_generator,load_summarizer,
@@ -38,7 +39,7 @@ answer_path = os.path.join(BASE_DIR, "answer.txt")
 input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
 
-top_k = 3
+top_k = 2
 docs_to_embed = 1000
 batch_size = 8
 max_query_length = 256
@@ -46,7 +47,7 @@ max_new_tokens = 100
 temperature = 0.7
 top_p = 0.9
 
-relevance_threshold = -2.5
+relevance_threshold = -1
 
 encoder_model_name = "BAAI/bge-base-en-v1.5"
 reranker_model_name = "BAAI/bge-reranker-large"
@@ -96,7 +97,7 @@ async def lifespan(app: FastAPI):
 	if embs is None or docs is None:
 		print("Embeddings or docs missing, building from Wikipedia dataset...")
 		wiki = load_dataset("wikipedia", "20220301.en", split=f"train[:{docs_to_embed}]", trust_remote_code=True)
-		docs = [clean_text(ex["text"]) for ex in wiki]
+		docs = [chunk for ex in wiki for chunk in chunk_text(clean_text(ex["text"]))]
 		all_embs = []
 		for i in tqdm(range(0, len(docs), batch_size), desc="Embedding batches"):
 			batch = docs[i:i+batch_size]
@@ -189,7 +190,6 @@ def answer_query(req: QueryRequest):
 	print("step 1")
 
 	# --- Step 2: Pad with relevant Wikipedia docs if needed ---
-	max_wiki_doc_len = 300
 
 	if num_wiki_docs > 0:
 		query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
@@ -199,22 +199,26 @@ def answer_query(req: QueryRequest):
 		wiki_reranked = rerank(query, wiki_docs, rr_tok, rr_model)  # returns list of (doc, score)
 		wiki_reranked_relevant = [(doc, score) for doc, score in wiki_reranked if score > relevance_threshold]
 		wiki_reranked_relevant.sort(key=lambda x: x[1], reverse=True)
-		chosen_wiki_docs = [doc for doc, _ in wiki_reranked[:num_wiki_docs]]
+		chosen_wiki_docs_raw = [doc for doc, _ in wiki_reranked[:num_wiki_docs]]
+		chosen_wiki_docs = [summarize(doc, summarizer_tokenizer, summarizer_model) for doc in chosen_wiki_docs_raw]
 
-
-	print(chosen_user_docs)
-	print(chosen_wiki_docs)
+	#print(chosen_user_docs)
+	#print(chosen_wiki_docs)
 	user_context = " ".join(chosen_user_docs)
 	wiki_context = " ".join(chosen_wiki_docs)
 
 	print("step 2")
 		
+	start = time.time()
 	answer = generate_answer(query, wiki_context, user_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+	end = time.time()
 
 	print("answer made")
+	print("elapsed time (s): ", end-start)
 
 	with open(answer_path, "w", encoding="utf-8") as f:
 		f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")
+		f.close()
 	#clean_and_overwrite_answer_file(answer_path)
 
 	return JSONResponse(content={"answer": answer})

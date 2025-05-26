@@ -78,6 +78,8 @@ def generate_answer(query, wiki_context, user_context, tokenizer, model, max_new
 	input_text += f"Additional reference (Wikipedia): {wiki_context}\n"
 	input_text += "Answer:"
 
+	print(input_text)
+
 	inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(device)
 	model.config.pad_token_id = model.config.eos_token_id
 	outputs = model.generate(

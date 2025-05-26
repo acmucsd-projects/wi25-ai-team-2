@@ -2,6 +2,7 @@ import os
 from pdf2image import convert_from_path
 from paddleocr import PaddleOCR
 from models import summarize 
+from utils import chunk_text
 import re
 
 # === Init OCR model ===
@@ -29,10 +30,6 @@ def extract_text_with_paddleocr(img_path):
 # === Cleaning & Chunking ===
 def clean_text(text):
 	return re.sub(r'\s+', ' ', text.strip())
-
-def chunk_text(text, max_words=300):
-	words = text.split()
-	return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
 def process_uploaded_files(
 	file_paths,

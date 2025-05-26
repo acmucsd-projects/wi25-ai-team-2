@@ -12,6 +12,10 @@ def clean_text(t):
     """Clean and normalize the input text."""
     return re.sub(r'\s+', ' ', t.strip())
 
+def chunk_text(text, max_words=300):
+	words = text.split()
+	return [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
+
 def save(embs, docs, embedding_path, document_path):
     """Save embeddings and documents to disk."""
     np.save(embedding_path, embs.cpu().numpy())
