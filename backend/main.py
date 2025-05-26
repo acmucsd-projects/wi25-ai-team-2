@@ -42,14 +42,12 @@ input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
 
 top_k = 5
-top_k_for_rerank = 50
 docs_to_embed = 1000
 batch_size = 8
 max_query_length = 256
 max_new_tokens = 100
 temperature = 0.7
 top_p = 0.9
-relevance_threshold = -1
 
 encoder_model_name = "BAAI/bge-base-en-v1.5"
 reranker_model_name = "BAAI/bge-reranker-large"
@@ -69,6 +67,7 @@ user_docs = []
 
 processed_files = set()
 public_url = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -204,47 +203,47 @@ def answer_query(req: QueryRequest):
     if not user_docs:
         user_docs = load_user_docs(user_docs_path)
 
-    with torch.no_grad():
-        # Rerank user docs
-        user_reranked = rerank(query, user_docs, rr_tok, rr_model)
-        user_filtered = [(doc, score, "user") for doc, score in user_reranked if score > relevance_threshold]
+    # Rerank user docs
+    user_reranked = rerank(query, user_docs, rr_tok, rr_model)
+    relevance_threshold = -2.5
+    high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
+    high_relevance_user_docs.sort(key=lambda x: x[1], reverse=True)
+    high_relevance_docs = [doc for doc, _ in high_relevance_user_docs]
 
-        # FAISS retrieval + rerank wiki docs
+    final_docs = high_relevance_docs[:top_k]
+    needed_wiki_docs = max(0, top_k - len(final_docs))
+
+    # Pad with Wikipedia docs if needed
+    if needed_wiki_docs > 0:
         query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
-        _, top_idx = index.search(query_emb.cpu().numpy(), top_k_for_rerank)
+        _, top_idx = index.search(query_emb.cpu().numpy(), top_k)
         wiki_candidates = [docs[i] for i in top_idx[0]]
+
         wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)
-        wiki_filtered = [(doc, score, "wiki") for doc, score in wiki_reranked if score > relevance_threshold]
+        wiki_reranked.sort(key=lambda x: x[1], reverse=True)
+        top_wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
 
-    # Combine and sort all docs by score descending
-    combined = user_filtered + wiki_filtered
-    combined.sort(key=lambda x: x[1], reverse=True)
+        # Summarize each top Wikipedia doc
+        summarized_wiki_docs = []
+        for doc in top_wiki_docs:
+            if doc.strip():
+                sum_inputs = sum_tok(doc[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
+                with torch.no_grad():
+                    summary_ids = sum_model.generate(
+                        sum_inputs["input_ids"],
+                        max_length=256,
+                        num_beams=4,
+                        early_stopping=True,
+                    )
+                summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
+                summarized_wiki_docs.append(summary)
 
-    # Pick top_k overall
-    top_docs = combined[:top_k]
-    if not top_docs:
-        return JSONResponse(content={"answer": "Sorry, no relevant information found."})
+        final_docs.extend(summarized_wiki_docs)
 
-    # Prepare text for summarization
-    # Concatenate docs separated by [SEP] tokens (or newlines)
-    combined_text = "\n\n".join(doc for doc, _, _ in top_docs)
+    wiki_context = " ".join(final_docs)
+    user_summary = " ".join(user_docs)
 
-    # Summarize once if not too long
-    inputs = sum_tok(combined_text[:2048], return_tensors="pt", max_length=1024, truncation=True).to(device)
-    with torch.no_grad():
-        summary_ids = sum_model.generate(
-            inputs["input_ids"],
-            max_length=256,
-            num_beams=4,
-            early_stopping=True,
-        )
-    summary = sum_tok.decode(summary_ids[0], skip_special_tokens=True)
-
-    # Optionally combine user docs summary (if you want separate handling)
-    user_summary = " ".join(doc for doc, _, src in top_docs if src == "user")
-    # You can merge or keep separate summaries as you prefer
-
-    answer = generate_answer(query, summary, user_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+    answer = generate_answer(query, wiki_context, user_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
 
     with open(answer_path, "w", encoding="utf-8") as f:
         f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")
