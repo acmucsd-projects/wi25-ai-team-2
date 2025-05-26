@@ -44,9 +44,9 @@ output_pages = os.path.join(BASE_DIR, "output_pages")
 top_k = 5
 docs_to_embed = 1000
 batch_size = 8
-max_query_length = 256
+max_query_length = 512
 max_new_tokens = 100
-relevance_threshold = -2.5
+relevance_threshold = -3
 temperature = 0.7
 top_p = 0.9
 
