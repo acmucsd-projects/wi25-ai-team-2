@@ -75,9 +75,9 @@ If you want to run the backend in Google Colab:
 
 3. Add the following secrets in the secrets tab:
 
-   NGROK_AUTH_TOKEN=your-ngrok-auth-token
-   JSONBIN_API_KEY=your-jsonbin-api-key
-   JSONBIN_URL=https://api.jsonbin.io/v3/b/your-bin-id
+       NGROK_AUTH_TOKEN=your-ngrok-auth-token
+       JSONBIN_API_KEY=your-jsonbin-api-key
+       JSONBIN_URL=https://api.jsonbin.io/v3/b/your-bin-id
 
 4. Run the notebook cells as usual.
 
