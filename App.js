@@ -1,20 +1,57 @@
-import React, { useState } from 'react';
-import { Platform, View, Text, Button, TextInput, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
-
-// For mobile
+import React, { useEffect, useState } from 'react';
+import {
+  Platform,
+  View,
+  Text,
+  Button,
+  TextInput,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+} from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-
-// Dynamic backend URL from config.js
-import { API_BASE } from './config'; // adjust if needed
+import { JSONBIN_BIN_ID, JSONBIN_API_KEY } from '@env';
 
 export default function App() {
+  const [backendUrl, setBackendUrl] = useState('');
   const [fileStatus, setFileStatus] = useState('');
   const [query, setQuery] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Upload for Mobile using expo-document-picker
+  useEffect(() => {
+    // Fetch backend URL from JSONBin once on mount
+    const fetchBackendUrl = async () => {
+      try {
+        const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+          headers: {
+            'X-Master-Key': JSONBIN_API_KEY,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+
+        const json = await res.json();
+        const url = json.record?.url;
+
+        if (!url) throw new Error('Backend URL not found in JSONBin record');
+
+        setBackendUrl(url);
+      } catch (error) {
+        console.error('Failed to load backend URL:', error);
+        setFileStatus('Error loading backend URL');
+      }
+    };
+
+    fetchBackendUrl();
+  }, []);
+
   const pickAndUploadFileMobile = async () => {
+    if (!backendUrl) {
+      setFileStatus('Backend URL not loaded yet');
+      return;
+    }
     try {
       const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
       if (res.type === 'cancel') return;
@@ -29,22 +66,30 @@ export default function App() {
         type: mimeType || 'application/octet-stream',
       });
 
-      // IMPORTANT: Don't set 'Content-Type', fetch will set it with correct boundary on React Native
-      const response = await fetch(`${API_BASE}/upload/`, {
+      const response = await fetch(`${backendUrl}/upload/`, {
         method: 'POST',
         body: formData,
       });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Upload failed: HTTP ${response.status} - ${errorText}`);
+      }
+
       const data = await response.json();
-      setFileStatus(data.message);
+      setFileStatus(data.message || 'Upload complete');
     } catch (err) {
       console.error(err);
-      setFileStatus('Upload failed.');
+      setFileStatus('Upload failed: ' + (err.message || err));
     }
   };
 
-  // Upload for Web using input element
   const pickAndUploadFileWeb = async (event) => {
+    if (!backendUrl) {
+      setFileStatus('Backend URL not loaded yet');
+      return;
+    }
+
     const file = event.target.files[0];
     if (!file) return;
 
@@ -54,36 +99,51 @@ export default function App() {
     formData.append('file', file);
 
     try {
-      const response = await fetch(`${API_BASE}/upload/`, {
+      const response = await fetch(`${backendUrl}/upload/`, {
         method: 'POST',
         body: formData,
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Upload failed: HTTP ${response.status} - ${errorText}`);
+      }
+
       const data = await response.json();
-      setFileStatus(data.message);
+      setFileStatus(data.message || 'Upload complete');
     } catch (err) {
       console.error(err);
-      setFileStatus('Upload failed.');
+      setFileStatus('Upload failed: ' + (err.message || err));
     }
   };
 
   const submitQuery = async () => {
     if (!query.trim()) return;
+    if (!backendUrl) {
+      setAnswer('Backend URL not loaded yet');
+      return;
+    }
 
     setLoading(true);
     setAnswer('');
 
     try {
-      const response = await fetch(`${API_BASE}/query/`, {
+      const response = await fetch(`${backendUrl}/query/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query }),
       });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Query failed: HTTP ${response.status} - ${errorText}`);
+      }
+
       const data = await response.json();
-      setAnswer(data.answer);
+      setAnswer(data.answer || 'No answer returned');
     } catch (err) {
       console.error(err);
-      setAnswer('Error retrieving answer.');
+      setAnswer('Error retrieving answer: ' + (err.message || err));
     } finally {
       setLoading(false);
     }
@@ -99,12 +159,17 @@ export default function App() {
             type="file"
             onChange={pickAndUploadFileWeb}
             style={{ marginBottom: 10 }}
+            disabled={!backendUrl}
           />
           <Text>{fileStatus}</Text>
         </>
       ) : (
         <>
-          <Button title="Upload File" onPress={pickAndUploadFileMobile} />
+          <Button
+            title="Upload File"
+            onPress={pickAndUploadFileMobile}
+            disabled={!backendUrl}
+          />
           <Text>{fileStatus}</Text>
         </>
       )}
@@ -114,11 +179,16 @@ export default function App() {
         placeholder="Enter your question..."
         value={query}
         onChangeText={setQuery}
+        editable={!!backendUrl}
       />
-      <Button title="Submit Query" onPress={submitQuery} />
+      <Button
+        title="Submit Query"
+        onPress={submitQuery}
+        disabled={!query.trim() || loading || !backendUrl}
+      />
 
       {loading ? (
-        <ActivityIndicator style={{ marginTop: 20 }} />
+        <ActivityIndicator style={{ marginTop: 20 }} size="large" />
       ) : (
         <Text style={styles.answer}>{answer}</Text>
       )}
@@ -128,7 +198,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flexGrow: 1, padding: 20, justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 20 },
-  input: { borderWidth: 1, padding: 10, marginTop: 20, marginBottom: 10 },
+  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
+  input: { borderWidth: 1, borderColor: '#999', padding: 10, marginTop: 20, marginBottom: 10, borderRadius: 5 },
   answer: { marginTop: 20, fontSize: 16 },
 });

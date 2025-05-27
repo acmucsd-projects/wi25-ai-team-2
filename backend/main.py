@@ -11,6 +11,8 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from contextlib import asynccontextmanager
+import asyncio
+import re
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -40,12 +42,13 @@ user_docs_path = os.path.join(documents_and_index, "user_docs.txt")
 answer_path = os.path.join(BASE_DIR, "answer.txt")
 input_folder = os.path.join(BASE_DIR, "uploaded_files")
 output_pages = os.path.join(BASE_DIR, "output_pages")
+grok_url_file = os.path.join(BASE_DIR, "grok_url.txt")
 
 top_k = 5
 docs_to_embed = 1000
 batch_size = 8
 max_query_length = 512
-max_new_tokens = 100
+max_new_tokens = 500
 relevance_threshold = -3
 temperature = 0.7
 top_p = 0.9
@@ -69,6 +72,41 @@ user_docs = []
 processed_files = set()
 public_url = None
 
+async def launch_grok_and_capture_url():
+    """
+    Launches `grok http 8000` as a subprocess,
+    reads its stdout lines asynchronously,
+    extracts the public URL, writes it to grok_url.txt,
+    and returns the URL.
+    """
+    global public_url
+
+    # Make sure grok command is available on your system path
+    proc = await asyncio.create_subprocess_exec(
+        "grok", "http", "8000",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        text=True
+    )
+
+    url_pattern = re.compile(r"https://[a-zA-Z0-9.-]+\.grok\.dev")
+
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        print(f"[grok] {line.strip()}")
+        match = url_pattern.search(line)
+        if match:
+            public_url = match.group(0)
+            print(f"Detected Grok public URL: {public_url}")
+            with open(grok_url_file, "w", encoding="utf-8") as f:
+                f.write(public_url)
+            # Optionally: break after first URL detected
+            break
+
+    # Note: proc keeps running (grok tunnels traffic)
+    return public_url
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -239,7 +277,7 @@ def answer_query(req: QueryRequest):
 
     wiki_context = "\n\n".join(summarized_wiki_docs)
     user_summary = "\n\n".join(user_summary_docs)
-    
+
     if not user_summary_docs and not summarized_wiki_docs:
         return JSONResponse(content={"answer": "Sorry, I couldn't find any relevant information to answer that."})
 

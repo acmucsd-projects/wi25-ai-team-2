@@ -5,7 +5,6 @@ from transformers import (
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 bnb_config = BitsAndBytesConfig(
 	load_in_4bit=True,
 	bnb_4bit_compute_dtype=torch.float16,
@@ -37,7 +36,7 @@ def load_summarizer(name, quantized=False):
 		model = AutoModelForSeq2SeqLM.from_pretrained(name).to(device)
 	return tokenizer, model
 
-def load_generator(model_name, quantized=False):
+def load_generator(model_name, quantized=True):
 	tokenizer = AutoTokenizer.from_pretrained(model_name)
 	tokenizer.pad_token = tokenizer.eos_token
 	if quantized:
@@ -57,7 +56,7 @@ def rerank(query, candidates, tokenizer, model):
 	scores = [model(**input).logits[0].item() for input in inputs]
 	doc_scores = list(zip(candidates, scores))
 	doc_scores.sort(key=lambda x: x[1], reverse=True)
-	
+
 	return doc_scores
 
 def summarize(text, tokenizer, model, max_input_len=512, max_output_len=150):
@@ -75,7 +74,7 @@ def generate_answer(query, wiki_context, user_context, tokenizer, model, max_new
 	input_text += f"Most relevant information: {user_context}\n"
 	input_text += f"Additional reference (Wikipedia): {wiki_context}\n"
 	input_text += "Answer:"
- 
+
 	print(input_text)
 
 	inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(device)
