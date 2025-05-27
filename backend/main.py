@@ -12,6 +12,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from contextlib import asynccontextmanager
 import asyncio
+import subprocess
 import re
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -48,7 +49,7 @@ top_k = 5
 docs_to_embed = 1000
 batch_size = 8
 max_query_length = 512
-max_new_tokens = 500
+max_new_tokens = 1000
 relevance_threshold = -3
 temperature = 0.7
 top_p = 0.9
@@ -242,46 +243,49 @@ def answer_query(req: QueryRequest):
     if not user_docs:
         user_docs = load_user_docs(user_docs_path)
 
-    # Rerank user docs and filter by relevance threshold
-    user_reranked = rerank(query, user_docs, rr_tok, rr_model)
-    high_relevance_user_docs = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
-    high_relevance_user_docs.sort(key=lambda x: x[1], reverse=True)
-    high_relevance_docs = [doc for doc, _ in high_relevance_user_docs]
 
-    # Take up to top_k relevant user docs for user_summary
-    user_summary_docs = high_relevance_docs[:top_k]
+    # --- Step 1: Get Userdocs ---
 
-    needed_wiki_docs = max(0, top_k - len(user_summary_docs))
-    summarized_wiki_docs = []
+    user_reranked = rerank(query, user_docs, rr_tok, rr_model)  # returns list of (doc, score)
+    user_reranked_relevant = [(doc, score) for doc, score in user_reranked if score > relevance_threshold]
+    user_reranked_relevant.sort(key=lambda x: x[1], reverse=True) # sort by score
 
-    if needed_wiki_docs > 0:
-        # Get query embedding
+    chosen_user_docs = [doc for doc, _ in user_reranked_relevant] # remove score from each tuple
+
+    print("Step 1 complete: Userdocs retrieved")
+
+
+    # --- Step 2: Pad with relevant Wikipedia docs if needed ---
+
+    num_wiki_docs = max(0, top_k - len(chosen_user_docs))
+    chosen_wiki_docs = []
+
+    if num_wiki_docs > 0:
         query_emb = encode_query(query, enc_tok, enc_model, max_query_length)
-        _, top_idx = index.search(query_emb.cpu().numpy(), top_k)
-        wiki_candidates = [docs[i] for i in top_idx[0]]
+        _, top_idx = index.search(query_emb.cpu().numpy(), top_k)  # retrieve more for reranking quality
+        wiki_docs = [docs[i] for i in top_idx[0]]
 
-        # Rerank wiki candidates
-        wiki_reranked = rerank(query, wiki_candidates, rr_tok, rr_model)
-        # Filter by relevance threshold
-        wiki_reranked = [(doc, score) for doc, score in wiki_reranked if score > relevance_threshold]
-        # Sort descending by score
-        wiki_reranked.sort(key=lambda x: x[1], reverse=True)
-        # Pick top needed wiki docs after threshold filtering
-        top_wiki_docs = [doc for doc, _ in wiki_reranked[:needed_wiki_docs]]
+        wiki_reranked = rerank(query, wiki_docs, rr_tok, rr_model)  # returns list of (doc, score)
+        wiki_reranked_relevant = [(doc, score) for doc, score in wiki_reranked if score > relevance_threshold]
+        wiki_reranked_relevant.sort(key=lambda x: x[1], reverse=True)
 
-        # Summarize wiki docs
-        summarized_wiki_docs = [
-            summarize(doc[:2048], sum_tok, sum_model, max_input_len=1024, max_output_len=150)
-            for doc in top_wiki_docs if doc.strip()
-        ]
+        chosen_wiki_docs_raw = [doc for doc, _ in wiki_reranked[:num_wiki_docs]]
+        chosen_wiki_docs = [summarize(doc, summarizer_tokenizer, summarizer_model) for doc in chosen_wiki_docs_raw]
 
-    wiki_context = "\n\n".join(summarized_wiki_docs)
-    user_summary = "\n\n".join(user_summary_docs)
+    print("Step 2 complete: Wikidocs retrieved")
 
-    if not user_summary_docs and not summarized_wiki_docs:
+
+    # --- Step 3: LLM Query ---
+
+    #print(chosen_user_docs)
+    #print(chosen_wiki_docs)
+    user_context = " ".join(chosen_user_docs)
+    wiki_context = " ".join(chosen_wiki_docs)
+
+    if not chosen_user_docs and not chosen_wiki_docs:
         return JSONResponse(content={"answer": "Sorry, I couldn't find any relevant information to answer that."})
 
-    answer = generate_answer(query, wiki_context, user_summary, gen_tok, gen_model, max_new_tokens, temperature, top_p)
+    answer = generate_answer(query, wiki_context, user_context, gen_tok, gen_model, max_new_tokens, temperature, top_p)
 
     with open(answer_path, "w", encoding="utf-8") as f:
         f.write(f"Query: {query}\n\nAnswer: {answer}\n\n")
