@@ -65,6 +65,8 @@ To support this, install the Expo CLI if needed:
 
        npm install -g expo-cli
 
+---
+
 ### 3. Google Colab Setup (Optional)
 
 If you want to run the backend in Google Colab:
