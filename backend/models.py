@@ -59,7 +59,7 @@ def rerank(query, candidates, tokenizer, model):
 
 	return doc_scores
 
-def summarize(text, tokenizer, model, max_input_len=512, max_output_len=150):
+def summarize(text, tokenizer, model, max_input_len=512, max_output_len=500):
 	inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_input_len).to(device)
 	summary_ids = model.generate(
 		inputs["input_ids"],
