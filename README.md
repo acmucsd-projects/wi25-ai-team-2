@@ -1,4 +1,4 @@
-## WI25-AI-TEAM-2
+## wi25-ai-team-2
 
 This project implements a "Second Brain" system — a personal AI assistant that
 answers questions based on your uploaded documents, with optional fallback
