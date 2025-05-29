@@ -62,3 +62,14 @@ def load_user_docs(user_file):
             user_docs = file.readlines()
         return [clean_text(doc) for doc in user_docs]
     return []
+
+def truncate_to_last_complete_sentence(text):
+    # This splits on punctuation followed by any whitespace (space, newline, tab, etc.)
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+
+    # If text does not end with punctuation, remove the last sentence (likely incomplete)
+    if len(sentences) > 1 and not text.strip()[-1] in '.!?':
+        sentences = sentences[:-1]
+
+    # Join sentences back
+    return ' '.join(sentences).strip()

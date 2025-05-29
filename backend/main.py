@@ -12,7 +12,6 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from contextlib import asynccontextmanager
 import asyncio
-import subprocess
 import re
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -49,7 +48,7 @@ top_k = 5
 docs_to_embed = 1000
 batch_size = 8
 max_query_length = 512
-max_new_tokens = 500
+max_new_tokens = 100
 relevance_threshold = -3
 temperature = 0.7
 top_p = 0.9
@@ -277,8 +276,6 @@ def answer_query(req: QueryRequest):
 
     # --- Step 3: LLM Query ---
 
-    #print(chosen_user_docs)
-    #print(chosen_wiki_docs)
     user_context = " ".join(chosen_user_docs)
     wiki_context = " ".join(chosen_wiki_docs)
 

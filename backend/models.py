@@ -1,8 +1,10 @@
 import torch
+import re
 from transformers import (
 	AutoTokenizer, AutoModel, AutoModelForSequenceClassification,
 	AutoModelForCausalLM, AutoModelForSeq2SeqLM, BitsAndBytesConfig
 )
+from utils import truncate_to_last_complete_sentence
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 bnb_config = BitsAndBytesConfig(
@@ -70,21 +72,36 @@ def summarize(text, tokenizer, model, max_input_len=512, max_output_len=150):
 	return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
 def generate_answer(query, wiki_context, user_context, tokenizer, model, max_new_tokens, temperature, top_p):
-	input_text = f"Question: {query}\n"
-	input_text += f"Most relevant information: {user_context}\n"
-	input_text += f"Additional reference (Wikipedia): {wiki_context}\n"
-	input_text += "Answer:"
+    input_text = f"Question: {query}\n"
+    input_text += f"Most relevant information: {user_context}\n"
+    input_text += f"Additional reference (Wikipedia): {wiki_context}\n"
+    input_text += "Answer:"
 
-	print(input_text)
+    print(input_text)  # Optional: helpful for debugging
 
-	inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(device)
-	model.config.pad_token_id = model.config.eos_token_id
-	outputs = model.generate(
-		input_ids=inputs["input_ids"],
-		attention_mask=inputs["attention_mask"],
-		max_new_tokens=max_new_tokens,
-		do_sample=True,
-		temperature=temperature,
-		top_p=top_p,
-	)
-	return tokenizer.decode(outputs[0], skip_special_tokens=True).split("Answer:")[1].strip()
+    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(model.device)
+    model.config.pad_token_id = model.config.eos_token_id
+    
+    outputs = model.generate(
+        input_ids=inputs["input_ids"],
+        attention_mask=inputs["attention_mask"],
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=temperature,
+        top_p=top_p,
+				early_stopping=True
+    )
+    
+    # Decode the full output
+    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # Extract answer portion after "Answer:"
+    if "Answer:" in decoded:
+        answer = decoded.split("Answer:")[1].strip()
+    else:
+        answer = decoded.strip()
+
+    # Post-process: truncate any incomplete final sentence
+    answer = truncate_to_last_complete_sentence(answer)
+
+    return answer
